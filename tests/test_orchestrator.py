@@ -9,7 +9,7 @@ import pytest
 
 from faym_returns.browser import SessionConfig
 from faym_returns.orchestrator import Orchestrator, RunOptions
-from faym_returns.models import Platform, ReturnStatus
+from faym_returns.models import Platform, ReturnStatus, TaskStatus
 from faym_returns.workbook import ReturnsWorkbook, prepare_working_copy
 
 SOURCE = Path.home() / "Downloads" / "Faym Status Test Orders.xlsx"
@@ -105,7 +105,10 @@ def test_offline_run_records_planned_and_leaves_rows_pending(tmp_path: Path):
     assert len(report.results) == 16
     assert report.counts[ReturnStatus.PLANNED.value] == 13
     # Planned items are not review items - nothing was attempted.
-    assert report.needs_review == []
+    planned = [o for _, o in report.results if o.status is ReturnStatus.PLANNED]
+    assert all(o.task_status is not TaskStatus.NEEDS_REVIEW for o in planned)
+    # The two NA links are flagged instead of dropped.
+    assert len(report.needs_review) == 2
 
 
 def test_resume_skips_items_with_a_final_status(tmp_path: Path):

@@ -42,12 +42,22 @@ class ReturnFlow(str, Enum):
     SEQUENTIAL = "sequential"
 
 
-class ReturnStatus(str, Enum):
-    """Per-line-item outcome.
+#: The only values the spec permits in the ``Return status`` column.
+SPEC_PLACED = "Placed"
+SPEC_FAILED = "Failed"
+SPEC_OUT_OF_WINDOW = "Out of window"
+SPEC_RETURN_STATUSES = (SPEC_PLACED, SPEC_FAILED, SPEC_OUT_OF_WINDOW)
 
-    The values are the exact strings written into the workbook. The first four
-    match labels already present in the operators' sheet so history stays
-    readable; the rest were added for states the sheet had no word for.
+
+class ReturnStatus(str, Enum):
+    """Per-line-item outcome, at full precision.
+
+    The spec fixes ``Return status`` to Placed / Failed / Out of window, which
+    cannot express everything a platform actually reports. So these richer states
+    drive the agent's own logic and are written to a ``Detail`` column, while
+    :attr:`spec_status` collapses each one onto the permitted vocabulary for the
+    ``Return status`` column itself. Nothing is lost and the column stays
+    conformant.
     """
 
     PLACED = "Placed"
@@ -74,7 +84,37 @@ class ReturnStatus(str, Enum):
             ReturnStatus.FAILED,
             ReturnStatus.ITEM_NOT_FOUND,
             ReturnStatus.NOT_RETURNABLE,
+            # Never ordered, so a human should confirm the sheet is right rather
+            # than have the row quietly disappear.
+            ReturnStatus.NOT_ORDERED,
         }
+
+    @property
+    def spec_status(self) -> str:
+        """This outcome expressed in the spec's three permitted values.
+
+        Two mappings deserve stating outright:
+
+        ``Already Cancelled & Refunded`` -> ``Placed``
+            A return and refund do exist for the line item; the agent simply did
+            not have to create them. ``Failed`` would be plainly wrong, and the
+            Detail column records that it pre-existed.
+
+        ``Not yet delivered`` / ``Support Needed`` / ``Not ordered`` -> ``Failed``
+            No return was placed and none can be, so the only truthful value left
+            is ``Failed``. Each is flagged for human review with the reason in the
+            log, per the spec's requirement not to drop them silently.
+        """
+        if self is ReturnStatus.PLANNED:
+            # Nothing was attempted, so none of the three values is truthful -
+            # "Failed" would assert a failure that never happened. Blank, paired
+            # with a Task status of Pending, says exactly what is true.
+            return ""
+        if self in {ReturnStatus.PLACED, ReturnStatus.ALREADY_REFUNDED}:
+            return SPEC_PLACED
+        if self is ReturnStatus.OUT_OF_WINDOW:
+            return SPEC_OUT_OF_WINDOW
+        return SPEC_FAILED
 
 
 class TaskStatus(str, Enum):
@@ -155,6 +195,11 @@ class Outcome:
         if self.status.needs_human:
             return TaskStatus.NEEDS_REVIEW
         return TaskStatus.DONE
+
+    @property
+    def spec_status(self) -> str:
+        """Value for the spec's ``Return status`` column."""
+        return self.status.spec_status
 
     @property
     def refund_cell(self) -> object:

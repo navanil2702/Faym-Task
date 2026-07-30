@@ -170,6 +170,13 @@
         <input type="date" id="today">
       </div>
     </div>
+    <div class="row" style="margin-bottom:12px">
+      <div>
+        <label for="phone">Mobile number for OTP sign-in (optional)</label>
+        <input type="text" id="phone" inputmode="numeric" autocomplete="off"
+               placeholder="leave blank to sign in by hand">
+      </div>
+    </div>
     <div class="row">
       <button id="btnDry" class="primary" disabled>Dry run</button>
       <button id="btnLive" disabled>Go live…</button>
@@ -188,6 +195,21 @@
     <div class="shots" id="shots"></div>
   </section>
 </main>
+
+<dialog id="otpDlg">
+  <h3>Enter the one-time code</h3>
+  <p id="otpBlurb">
+    The agent filled the login form and requested a code. Enter it here and it
+    will submit the code and carry on.
+  </p>
+  <label for="otpCode">One-time code</label>
+  <input type="text" id="otpCode" inputmode="numeric" autocomplete="one-time-code"
+         maxlength="8" spellcheck="false">
+  <div class="row" style="margin-top:14px">
+    <button id="btnOtpManual">Sign in by hand instead</button>
+    <button id="btnOtpSubmit" class="primary" disabled>Submit code</button>
+  </div>
+</dialog>
 
 <dialog id="liveDlg">
   <h3>Submit real returns?</h3>
@@ -336,6 +358,32 @@ function handle(ev) {
         });
       }
       renderOrders();
+      break;
+
+    case "login_started":
+      $("loginPill").classList.remove("hide");
+      $("dotLogin").className = "dot wait";
+      $("loginLabel").textContent = "signing in";
+      break;
+
+    case "otp_required":
+      $("otpBlurb").textContent =
+        `The agent filled the login form for ${ev.phone || "the account"} and ` +
+        `requested a code from ${ev.platform || "the platform"}. Enter it here ` +
+        `and it will submit the code and carry on.`;
+      $("otpCode").value = "";
+      $("btnOtpSubmit").disabled = true;
+      if (!$("otpDlg").open) $("otpDlg").showModal();
+      break;
+
+    case "otp_received":
+      if ($("otpDlg").open) $("otpDlg").close();
+      break;
+
+    case "otp_timeout":
+      if ($("otpDlg").open) $("otpDlg").close();
+      banner("login", "Timed out waiting for the code",
+        "The agent is falling back to a manual sign-in in the Chrome window.");
       break;
 
     case "login_required":
@@ -490,6 +538,7 @@ async function run(live, confirmation) {
         live, confirmation,
         offline: $("offline").checked,
         fresh: $("fresh").checked,
+        phone: $("phone").value.trim() || null,
         limit: $("limit").value || null,
         today: $("today").value || null,
       }),
@@ -545,6 +594,36 @@ $("btnStop").onclick = async () => {
 
 $("btnDownload").onclick = () => { window.location = "/api/results"; };
 
+// ------------------------------------------------------------------------ OTP
+
+$("otpCode").addEventListener("input", () => {
+  $("btnOtpSubmit").disabled = !/\d/.test($("otpCode").value);
+});
+$("otpCode").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !$("btnOtpSubmit").disabled) $("btnOtpSubmit").click();
+});
+$("btnOtpSubmit").onclick = async () => {
+  const code = $("otpCode").value;
+  $("btnOtpSubmit").disabled = true;
+  try {
+    await api("/api/otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    $("otpCode").value = "";   // don't leave the code sitting in the field
+    $("otpDlg").close();
+  } catch (e) {
+    banner("login", "Could not submit the code", e.message, true);
+    $("btnOtpSubmit").disabled = false;
+  }
+};
+$("btnOtpManual").onclick = async () => {
+  try { await api("/api/otp/cancel", { method: "POST" }); } catch {}
+  $("otpCode").value = "";
+  $("otpDlg").close();
+};
+
 // ---------------------------------------------------------------- bootstrap
 
 (async function init() {
@@ -553,6 +632,9 @@ $("btnDownload").onclick = () => { window.location = "/api/results"; };
     const s = await api("/api/status");
     if (s.busy) setRunning(true, s.live ? "live run" : "dry run");
     if (s.results) $("btnDownload").disabled = false;
+    // A run may already be blocked on a code from before this page loaded.
+    const o = await api("/api/otp");
+    if (o.pending) handle({ kind: "otp_required", ...o.pending });
   } catch {}
 })();
 </script>

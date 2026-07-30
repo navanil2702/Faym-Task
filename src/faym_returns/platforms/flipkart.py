@@ -50,7 +50,7 @@ class FlipkartAdapter(PlatformAdapter):
             log.info("Flipkart session restored from the saved profile.")
             progress.publish("login_ok", platform=self.platform.value, restored=True)
             return
-        self.hand_off_login(self.sel["urls"]["login"])
+        self.log_in(self.sel["urls"]["login"])
         self.session.goto(self.sel["urls"]["orders"])
         if not self.is_logged_in():
             raise AgentAbort("Flipkart still appears signed out after the manual login step.")
@@ -304,6 +304,7 @@ class FlipkartAdapter(PlatformAdapter):
         reason = self._select_reason()
         self._maybe_add_comment()
         self._select_refund_mode()
+        self._select_pickup_option()
 
         # Advance through however many intermediate Continue steps there are.
         for _ in range(4):
@@ -451,4 +452,39 @@ class FlipkartAdapter(PlatformAdapter):
             try:
                 self.human.click(mode)
             except Exception:  # noqa: BLE001 - default is already selected
+                pass
+
+    def _select_pickup_option(self) -> None:
+        """Choose the pickup option and confirm the address already on the order.
+
+        Flipkart collects returned items, so the flow can ask where to collect
+        from and occasionally for a slot. Each element is optional - many items
+        skip straight to confirmation - so a missing one is not an error.
+
+        The existing address is confirmed rather than re-entered or changed:
+        redirecting a courier is not a decision to take unattended, and the
+        address on the order is the one the customer already gave.
+        """
+        option = find(self.page, self.s("actions", "pickup_option"), timeout=2500)
+        if option is not None:
+            try:
+                self.human.click(option)
+            except Exception:  # noqa: BLE001 - already selected, or not clickable
+                pass
+
+        slot = find(self.page, self.s("actions", "pickup_slot"), timeout=2000)
+        if slot is not None:
+            try:
+                # First offered slot: the earliest collection Flipkart proposes.
+                self.human.click(slot)
+            except Exception:  # noqa: BLE001
+                pass
+
+        confirm_address = find(
+            self.page, self.s("actions", "pickup_address_confirm"), timeout=2500
+        )
+        if confirm_address is not None:
+            try:
+                self.human.click(confirm_address)
+            except Exception:  # noqa: BLE001
                 pass

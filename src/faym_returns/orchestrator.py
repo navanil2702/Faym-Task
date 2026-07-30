@@ -17,6 +17,7 @@ from typing import Optional, Sequence
 
 from . import eligibility, progress
 from .browser import Session, SessionConfig
+from .otp import OtpProvider, console_otp
 from .models import (
     AgentAbort,
     LineItem,
@@ -92,11 +93,15 @@ class Orchestrator:
         session_config: SessionConfig,
         options: RunOptions,
         platform_config: Optional[dict] = None,
+        otp_provider: Optional[OtpProvider] = None,
     ):
         self.workbook = workbook
         self.session_config = session_config
         self.options = options
         self.platform_config = platform_config or {}
+        #: How to obtain a one-time code during sign-in. Without one, the agent
+        #: falls back to letting the operator sign in by hand.
+        self.otp_provider = otp_provider or console_otp
 
     # -------------------------------------------------------------- planning
 
@@ -254,10 +259,13 @@ class Orchestrator:
             with Session(self.session_config) as session:
                 for platform, orders in grouped.items():
                     adapter = adapter_for(platform)(
-                        session, self.platform_config.get(platform.value.lower(), {})
+                        session,
+                        self.platform_config.get(platform.value.lower(), {}),
+                        otp_provider=self.otp_provider,
                     )
-                    # A fresh tab per platform, as the workflow specifies.
-                    session.new_page()
+                    # A fresh tab for this platform, then sign in on it; each
+                    # subsequent record gets its own tab below.
+                    session.new_page(close_previous=True)
                     adapter.ensure_logged_in()
 
                     for order_index, (order_id, items) in enumerate(orders.items()):
@@ -271,6 +279,12 @@ class Orchestrator:
 
                         if order_index:
                             session.human.between_orders()
+
+                        # Spec workflow step 2: a new tab per record. The login
+                        # tab is reused for the first record so the sign-in the
+                        # adapter just completed is not thrown away.
+                        if order_index:
+                            session.new_page(close_previous=True)
 
                         log.info(
                             "Processing order %s (%d line item(s)) on %s",

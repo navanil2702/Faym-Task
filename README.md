@@ -110,11 +110,19 @@ past all of them. The agent correctly refuses all 14 items. Use
 `--today 2026-07-06` to exercise the pipeline as it would have behaved when the
 orders were live.
 
-**3. Login is yours, not the agent's.**
-The agent never handles a password or an OTP. It opens the login page, prints
-instructions, and waits while you sign in by hand in the visible Chrome window.
-Because the profile persists, this happens once — not every run. Real human
-keystrokes on the login form are also the least detectable way to authenticate.
+**3. Login: the agent drives the form, you supply the code.**
+Give it the mobile number (`--phone` on the CLI, or the field in the panel) and it
+fills the login form and presses *Request OTP* itself. The code cannot be
+automated — it is delivered out of band to the account holder — so the agent asks
+you for it (terminal prompt, or a dialog in the panel), then types and submits it.
+
+Omit the number and it falls back to letting you sign in entirely by hand; it also
+falls back automatically if the login form can't be located, so a changed login
+page never blocks a run. Because the browser profile persists, sign-in is
+once-per-profile rather than once-per-run.
+
+Codes are held in memory only for the moment between entry and submission. They
+are never logged, written to the workbook, or persisted.
 
 ---
 
@@ -160,17 +168,35 @@ duplicates.
 
 ### Statuses
 
-| Return Status | Meaning | Task Status |
+The spec fixes `Return status` to **Placed / Failed / Out of window**, which can't
+express everything a platform actually reports. So that column holds only those
+three values, and a `Detail` column carries the precise state. Nothing is lost and
+the column stays conformant.
+
+| Detail | Return status | Task status |
 |---|---|---|
-| `Placed` | Return filed; ID captured | Done |
-| `Already Cancelled & Refunded` | Platform had already refunded it | Done |
-| `Out of window` | Past its return window | Done |
-| `Not yet delivered` | Cannot return yet; re-run later | Done |
-| `Not ordered (NA)` | Marked `NA` in the sheet | Done |
-| `Support Needed` | No return control; needs chat support | **Needs human review** |
-| `Item not found on order` | SKU not matched on the order | **Needs human review** |
-| `Failed` | Error mid-flow; nothing submitted | **Needs human review** |
-| `Planned (not attempted)` | Offline plan only | Pending |
+| `Placed` | `Placed` | Done |
+| `Already Cancelled & Refunded` | `Placed` | Done |
+| `Out of window` | `Out of window` | Done |
+| `Not yet delivered` | `Failed` | Done |
+| `Support Needed` | `Failed` | **Needs human review** |
+| `Item not found on order` | `Failed` | **Needs human review** |
+| `Not returnable` | `Failed` | **Needs human review** |
+| `Not ordered (NA)` | `Failed` | **Needs human review** |
+| `Failed` | `Failed` | **Needs human review** |
+| `Planned (not attempted)` | *(blank)* | Pending |
+
+Two mappings are judgement calls worth stating:
+
+- **`Already Cancelled & Refunded` → `Placed`.** A return and refund do exist for
+  that line item; the agent simply didn't have to create them. `Failed` would be
+  plainly wrong.
+- **`Planned (not attempted)` → blank.** Plan-only mode attempts nothing, so
+  claiming `Failed` would assert a failure that never happened. Blank, paired with
+  a Task status of `Pending`, says exactly what is true.
+
+Resume decisions read `Detail`, not `Return status` — `Support Needed` and
+`Failed` both collapse to `Failed`, but only the latter should be re-attempted.
 
 `Failed` and `Planned` are the only non-final states, so only those requeue on the
 next run. Anything unrecognised in the column — including statuses an operator
@@ -200,6 +226,10 @@ one `NA`, four returns attempted.
 The agent detects which model a platform uses and follows the right path.
 `process_order()` returns an outcome **per SKU** either way, so write-back stays
 line-item oriented regardless.
+
+Each record gets its own browser tab, per the spec workflow; the tab is closed
+when the record is done so a long run doesn't accumulate one tab per order. The
+browser context is shared, so a new tab never means signing in again.
 
 - **Flipkart — sequential.** No multi-item wizard exists; each SKU has its own
   Return control and its own window, so the micro-flow repeats per item.
@@ -272,6 +302,7 @@ the delays for debugging and should never point at a live site.
 | `--platform` | Restrict to `Amazon` or `Flipkart` (repeatable). |
 | `--today DATE` | Override today's date for the window check. |
 | `--no-resume` | Re-attempt items that already hold a final status. |
+| `--phone N` | Mobile number for OTP sign-in. The agent fills the form and requests the code, then asks you for it. |
 | `--seed N` | Seed the timing RNG for reproducible runs. |
 | `--allow-quiet-hours` | Permit a run inside quiet hours. |
 | `--grace-days N` | Slack before declaring an item out of window (default 1). |
@@ -291,6 +322,7 @@ src/faym_returns/
   browser.py        persistent Chrome session, fingerprint, challenge detection
   humanize.py       timing, pointer paths, typing rhythm
   progress.py       run event bus + cooperative stop signal
+  otp.py            one-time-code providers (terminal prompt / web panel)
   platforms/
     base.py         adapter contract, selector resolution
     flipkart.py     sequential per-item flow
@@ -299,7 +331,7 @@ src/faym_returns/
   webapp/
     server.py       FastAPI control panel; runs the agent on a worker thread
     static/         single-page UI, no build step
-tests/              94 tests, run against the real dataset's cell contents
+tests/              124 tests, run against the real dataset's cell contents
 ```
 
 ## Known limits
@@ -311,4 +343,5 @@ tests/              94 tests, run against the real dataset's cell contents
 - **Amazon is untested end-to-end** — the dataset is entirely Flipkart. The batch
   path is built to the documented flow and needs one supervised run.
 - **Refund routing is left at the platform default.** The agent will not choose a
-  bank account; that is a money decision for a human.
+  bank account; that is a money decision for a human. Likewise it confirms the
+  pickup address already on the order rather than changing where a courier goes.

@@ -84,8 +84,10 @@ def test_out_of_window_is_done_not_a_review_item():
     assert Outcome(status=ReturnStatus.OUT_OF_WINDOW).task_status is TaskStatus.DONE
 
 
-def test_not_ordered_is_done():
-    assert Outcome(status=ReturnStatus.NOT_ORDERED).task_status is TaskStatus.DONE
+def test_not_ordered_is_flagged_for_a_human():
+    """Spec section 5 requires skipped items be flagged, not silently dropped -
+    a never-ordered link means the sheet needs a human to check it."""
+    assert Outcome(status=ReturnStatus.NOT_ORDERED).task_status is TaskStatus.NEEDS_REVIEW
 
 
 def test_refund_cell_is_na_when_no_amount_was_shown():

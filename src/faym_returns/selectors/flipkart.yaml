@@ -27,6 +27,28 @@ logged_out:
   - "text:/enter email\\/mobile number/i"
   - "css:form input[type='text'][autocomplete='off']"
 
+# OTP sign-in. The agent fills the phone number and requests the code; the code
+# itself is supplied by the operator (it arrives by call/SMS to the account
+# holder) and the agent types and submits it.
+login:
+  phone_input:
+    - "placeholder:/enter email\\/mobile number/i"
+    - "role:textbox[name=/email.*mobile/i]"
+    - "css:form input[type='text']"
+  request_otp:
+    - "role:button[name=/request otp/i]"
+    - "text:/request otp/i"
+    - "role:button[name=/^continue$/i]"
+    - "css:button[type='submit']"
+  otp_input:
+    - "placeholder:/enter otp/i"
+    - "role:textbox[name=/otp/i]"
+    - "css:input[maxlength='6']"
+    - "css:input[type='number']"
+  submit:
+    - "role:button[name=/^(verify|log ?in|continue)$/i]"
+    - "css:button[type='submit']"
+
 orders_page:
   # A card/row per order in the order list.
   order_card:
@@ -83,6 +105,23 @@ actions:
     - "text:/original payment method/i"
     - "text:/refund to bank account/i"
     - "css:input[type='radio']"
+  # Pickup selection. Flipkart collects the item, so the flow asks which address
+  # to collect from and sometimes a slot. The agent confirms the address already
+  # on the order rather than choosing a different one - changing where a courier
+  # goes is not a decision to make unattended.
+  pickup_option:
+    - "text:/schedule (a )?pickup/i"
+    - "text:/pickup/i"
+    - "role:radio[name=/pickup/i]"
+  pickup_address_confirm:
+    - "role:button[name=/(confirm|use this|deliver to this) address/i]"
+    - "text:/confirm address/i"
+    - "text:/use this address/i"
+    - "css:button:has-text('Confirm')"
+  pickup_slot:
+    - "css:li[role='option']"
+    - "css:div[role='option']"
+    - "css:select[name*='slot']"
   continue_button:
     - "role:button[name=/^(continue|next|proceed)$/i]"
     - "text:/^continue$/i"

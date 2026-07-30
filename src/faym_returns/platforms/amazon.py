@@ -50,7 +50,7 @@ class AmazonAdapter(PlatformAdapter):
             log.info("Amazon session restored from the saved profile.")
             progress.publish("login_ok", platform=self.platform.value, restored=True)
             return
-        self.hand_off_login(self.sel["urls"]["login"])
+        self.log_in(self.sel["urls"]["login"])
         self.session.goto(self.sel["urls"]["orders"])
         if not self.is_logged_in():
             raise AgentAbort("Amazon still appears signed out after the manual login step.")
@@ -225,6 +225,8 @@ class AmazonAdapter(PlatformAdapter):
             else:
                 reasons[item.sku] = ""
 
+        self._select_refund_and_pickup()
+
         for _ in range(4):
             nxt = find(self.page, self.s("actions", "continue_button"), timeout=4000)
             if nxt is None:
@@ -361,6 +363,7 @@ class AmazonAdapter(PlatformAdapter):
 
         dropdown = find(self.page, self.s("actions", "reason_dropdown"), timeout=5000)
         reason = self._select_reason(dropdown) if dropdown is not None else ""
+        self._select_refund_and_pickup()
 
         for _ in range(4):
             nxt = find(self.page, self.s("actions", "continue_button"), timeout=4000)
@@ -420,6 +423,22 @@ class AmazonAdapter(PlatformAdapter):
             log=f"Return placed on Amazon. Reason: {reason or 'default'}.",
             screenshots=[shot] if shot else [],
         ).stamp()
+
+    def _select_refund_and_pickup(self) -> None:
+        """Take the default refund destination, then choose pickup if offered.
+
+        Every element is optional - Amazon's wizard varies by item, seller and
+        return method - so a missing one is not an error. The address already on
+        the order is confirmed rather than changed.
+        """
+        for key in ("refund_mode", "pickup_option", "pickup_slot", "pickup_address_confirm"):
+            element = find(self.page, self.s("actions", key), timeout=2200)
+            if element is None:
+                continue
+            try:
+                self.human.click(element)
+            except Exception:  # noqa: BLE001 - already selected, or not clickable
+                continue
 
     def _select_reason(self, dropdown: Locator) -> str:
         try:

@@ -125,3 +125,24 @@ def test_inspect_surfaces_the_approximate_delivery_note(client: TestClient):
     ).json()
     notes = [n for o in body["orders"] for n in o["notes"]]
     assert any("approximated" in n for n in notes)
+
+
+# ------------------------------------------------------------------------- OTP
+
+
+def test_otp_endpoint_reports_nothing_pending_when_idle(client: TestClient):
+    assert client.get("/api/otp").json()["pending"] is None
+
+
+def test_supplying_a_code_nobody_asked_for_is_rejected(client: TestClient):
+    res = client.post("/api/otp", json={"code": "123456"})
+    assert res.status_code == 409
+
+
+def test_a_code_with_no_digits_is_rejected(client: TestClient):
+    res = client.post("/api/otp", json={"code": "not-a-code"})
+    assert res.status_code == 400
+
+
+def test_cancelling_otp_is_always_safe(client: TestClient):
+    assert client.post("/api/otp/cancel").status_code == 200

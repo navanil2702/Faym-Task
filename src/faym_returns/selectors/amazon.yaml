@@ -68,6 +68,18 @@ actions:
   refund_mode:
     - "text:/refund to/i"
     - "css:input[type='radio'][name*='refund']"
+  # Amazon calls this the return method: drop-off vs scheduled pickup. Pickup is
+  # preferred where offered, since a drop-off needs a human to physically go.
+  pickup_option:
+    - "text:/schedule (a )?pickup/i"
+    - "text:/pick ?up/i"
+    - "css:input[type='radio'][value*='pickup' i]"
+  pickup_address_confirm:
+    - "role:button[name=/(confirm|use this) address/i]"
+    - "text:/use this address/i"
+  pickup_slot:
+    - "css:select[name*='slot']"
+    - "css:input[type='radio'][name*='slot']"
   continue_button:
     - "role:button[name=/^continue$/i]"
     - "css:input[type='submit'][value*='Continue']"

@@ -14,6 +14,7 @@ from playwright.sync_api import Locator, Page
 from .. import progress
 from ..browser import Session
 from ..models import AgentAbort, LineItem, Outcome, Platform, ReturnFlow
+from ..otp import DEFAULT_TIMEOUT_S, OtpProvider
 
 log = logging.getLogger(__name__)
 
@@ -171,10 +172,16 @@ class PlatformAdapter(ABC):
     platform: Platform
     selector_key: str
 
-    def __init__(self, session: Session, config: dict | None = None):
+    def __init__(
+        self,
+        session: Session,
+        config: dict | None = None,
+        otp_provider: Optional[OtpProvider] = None,
+    ):
         self.session = session
         self.config = config or {}
         self.sel = load_selectors(self.selector_key)
+        self.otp_provider = otp_provider
 
     @property
     def page(self) -> Page:
@@ -221,6 +228,84 @@ class PlatformAdapter(ABC):
         ...
 
     # -------------------------------------------------------------------- login
+
+    def log_in(self, login_url: str, *, timeout_s: int = 600) -> None:
+        """Sign in, driving the OTP form when a phone number is configured.
+
+        The agent fills the phone number and presses "request OTP" itself. The
+        code cannot be automated - it is delivered out of band to the account
+        holder - so it comes from the configured provider (a terminal prompt, or
+        an input in the web panel) and the agent submits it.
+
+        With no phone number configured, or if the form cannot be located, this
+        falls back to :meth:`hand_off_login` so a run is never blocked by a
+        login page that has changed shape.
+        """
+        phone = str(self.config.get("phone") or "").strip()
+        if phone and self.otp_provider is not None:
+            try:
+                if self._otp_login(login_url, phone, timeout_s=timeout_s):
+                    return
+                log.warning(
+                    "Automated OTP sign-in did not complete; handing over to the operator."
+                )
+            except AgentAbort:
+                raise
+            except Exception as exc:  # noqa: BLE001 - fall back, never fail the run
+                log.warning("Automated OTP sign-in failed (%s); handing over.", exc)
+        self.hand_off_login(login_url, timeout_s=timeout_s)
+
+    def _otp_login(self, login_url: str, phone: str, *, timeout_s: int) -> bool:
+        """Drive the phone + OTP form. False means fall back to a manual sign-in."""
+        self.session.goto(login_url)
+
+        phone_field = find(self.page, self.s("login", "phone_input"), timeout=8000)
+        if phone_field is None:
+            return False
+
+        progress.publish("login_started", platform=self.platform.value, phone=phone)
+        self.human.type_text(phone_field, phone)
+        self.human.micro()
+
+        request = find(self.page, self.s("login", "request_otp"), timeout=5000)
+        if request is None:
+            return False
+        self.human.click(request)
+        self.session.assert_not_challenged()
+        self.human.think()
+
+        # Only ask for a code once the field for it actually exists, so the
+        # operator is not prompted for a code the site never sent.
+        otp_field = find(self.page, self.s("login", "otp_input"), timeout=15000)
+        if otp_field is None:
+            return False
+
+        code = self.otp_provider(  # type: ignore[misc]
+            platform=self.platform.value,
+            phone=phone,
+            timeout_s=min(timeout_s, DEFAULT_TIMEOUT_S),
+        )
+        if not code:
+            return False
+
+        self.human.type_text(otp_field, code)
+        submit = find(self.page, self.s("login", "submit"), timeout=4000)
+        if submit is not None:
+            self.human.click(submit)
+        else:
+            self.page.keyboard.press("Enter")
+
+        self.page.wait_for_load_state("domcontentloaded")
+        self.human.think(1.3)
+        self.session.assert_not_challenged()
+
+        # The site may take a moment to establish the session after submitting.
+        for _ in range(10):
+            if self.is_logged_in():
+                progress.publish("login_ok", platform=self.platform.value)
+                return True
+            self.page.wait_for_timeout(1500)
+        return False
 
     def hand_off_login(self, login_url: str, *, timeout_s: int = 600) -> None:
         """Open the login page and wait for the operator to sign in by hand.

@@ -52,6 +52,7 @@ LINE_ITEM_COLUMNS = [
     "Ordered?",
     "Return ID",
     "Return Status",
+    "Detail",
     "Refund Amount",
     "Task Status",
     "Timestamp",
@@ -218,7 +219,9 @@ class ReturnsWorkbook:
             "Delivery Date": delivery,
             "Ordered?": "Yes" if item.ordered else "No (NA)",
             "Return ID": outcome.return_id or "N/A",
-            "Return Status": outcome.status.value,
+            # Spec-conformant vocabulary here; full precision in Detail.
+            "Return Status": outcome.spec_status,
+            "Detail": outcome.status.value,
             "Refund Amount": outcome.refund_cell,
             "Task Status": outcome.task_status.value,
             "Timestamp": (outcome.timestamp or dt.datetime.now()).isoformat(timespec="seconds"),
@@ -264,9 +267,12 @@ class ReturnsWorkbook:
         else:
             row_status = TaskStatus.DONE.value
 
+        # The order row speaks the spec vocabulary too; per-item precision lives
+        # on the Line Items sheet.
         counts: dict[str, int] = {}
         for status in statuses:
-            counts[status.value] = counts.get(status.value, 0) + 1
+            label = status.spec_status or status.value
+            counts[label] = counts.get(label, 0) + 1
         summary = ", ".join(f"{name} x{n}" for name, n in counts.items()) or "No actionable items"
 
         skipped = len(group) - len(actionable)
@@ -314,6 +320,10 @@ def existing_outcomes(path: Path) -> dict[tuple[str, str], str]:
     sheet = book[LINE_ITEMS_SHEET]
     order_col = LINE_ITEM_COLUMNS.index("Order ID") + 1
     sku_col = LINE_ITEM_COLUMNS.index("Product / SKU") + 1
+    # Resume decisions need the precise state, not the three-value spec column:
+    # "Failed" and "Support Needed" both read as Failed there, but only the first
+    # should be re-attempted. Fall back to Return Status for pre-Detail files.
+    detail_col = LINE_ITEM_COLUMNS.index("Detail") + 1
     status_col = LINE_ITEM_COLUMNS.index("Return Status") + 1
     out: dict[tuple[str, str], str] = {}
     for row in range(2, sheet.max_row + 1):
@@ -321,7 +331,10 @@ def existing_outcomes(path: Path) -> dict[tuple[str, str], str]:
         if not order_id:
             continue
         sku = str(sheet.cell(row=row, column=sku_col).value or "").strip()
-        status = sheet.cell(row=row, column=status_col).value
+        status = (
+            sheet.cell(row=row, column=detail_col).value
+            or sheet.cell(row=row, column=status_col).value
+        )
         if status:
             out[(str(order_id).strip(), sku)] = str(status).strip()
     return out

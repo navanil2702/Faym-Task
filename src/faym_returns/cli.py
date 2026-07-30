@@ -92,6 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Days of slack before declaring an item out of window (default: 1)",
     )
     parser.add_argument(
+        "--phone",
+        help="Mobile number for OTP sign-in. Given this, the agent fills the "
+        "login form and requests the code itself, then asks you for the code. "
+        "Omit it to sign in entirely by hand.",
+    )
+    parser.add_argument(
         "--today",
         type=lambda s: dt.date.fromisoformat(s),
         help="Override today's date (YYYY-MM-DD) for the window check. For "
@@ -195,7 +201,12 @@ def main(argv: list[str] | None = None) -> int:
         pacing=pacing,
     )
 
-    orchestrator = Orchestrator(book, session_config, options)
+    # The same number is offered to whichever platform needs a sign-in; only the
+    # platforms present in the sheet will ever use it.
+    platform_config = (
+        {p.value.lower(): {"phone": args.phone} for p in Platform} if args.phone else {}
+    )
+    orchestrator = Orchestrator(book, session_config, options, platform_config)
 
     if args.live and not args.offline:
         to_attempt, _ = orchestrator.plan()

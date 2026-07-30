@@ -11,6 +11,7 @@ import pytest
 
 from faym_returns.models import LineItem, Outcome, Platform, ReturnStatus, TaskStatus
 from faym_returns.workbook import (
+    LINE_ITEM_COLUMNS,
     LINE_ITEMS_SHEET,
     ReturnsWorkbook,
     prepare_working_copy,
@@ -28,6 +29,12 @@ def book(tmp_path: Path) -> ReturnsWorkbook:
     working = tmp_path / "results.xlsx"
     prepare_working_copy(SOURCE, working)
     return ReturnsWorkbook(working)
+
+
+def _cell(path: Path, column: str, row: int = 2):
+    """Read a Line Items cell by column name, not by a brittle index."""
+    sheet = openpyxl.load_workbook(path)[LINE_ITEMS_SHEET]
+    return sheet.cell(row=row, column=LINE_ITEM_COLUMNS.index(column) + 1).value
 
 
 def _item(sku: str, row: int = 6, index: int = 0, ordered: bool = True) -> LineItem:
@@ -155,11 +162,53 @@ def test_dry_run_is_marked_in_the_log(book: ReturnsWorkbook):
         [(_item("AAA"), Outcome(ReturnStatus.PLACED, "RET-A").stamp())],
         dry_run_marker=True,
     )
-    sheet = openpyxl.load_workbook(book.path)[LINE_ITEMS_SHEET]
-    assert "DRY RUN" in sheet.cell(row=2, column=15).value
+    assert "DRY RUN" in _cell(book.path, "Log")
 
 
 def test_refund_amount_is_na_when_platform_showed_none(book: ReturnsWorkbook):
     book.write_results([(_item("AAA"), Outcome(ReturnStatus.OUT_OF_WINDOW).stamp())])
-    sheet = openpyxl.load_workbook(book.path)[LINE_ITEMS_SHEET]
-    assert sheet.cell(row=2, column=12).value == "N/A"
+    assert _cell(book.path, "Refund Amount") == "N/A"
+
+
+# ------------------------------------------------- spec-conformant status column
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        (ReturnStatus.PLACED, "Placed"),
+        (ReturnStatus.ALREADY_REFUNDED, "Placed"),
+        (ReturnStatus.OUT_OF_WINDOW, "Out of window"),
+        (ReturnStatus.NOT_DELIVERED, "Failed"),
+        (ReturnStatus.SUPPORT_NEEDED, "Failed"),
+        (ReturnStatus.ITEM_NOT_FOUND, "Failed"),
+        (ReturnStatus.NOT_ORDERED, "Failed"),
+        (ReturnStatus.FAILED, "Failed"),
+        # Nothing attempted: asserting a failure would be untrue.
+        (ReturnStatus.PLANNED, None),
+    ],
+)
+def test_return_status_column_uses_only_the_three_spec_values(
+    book: ReturnsWorkbook, status: ReturnStatus, expected: str
+):
+    book.write_results([(_item("AAA"), Outcome(status).stamp())])
+    assert _cell(book.path, "Return Status") == expected
+
+
+def test_detail_column_preserves_the_precise_state(book: ReturnsWorkbook):
+    """Collapsing to three values must not lose what actually happened."""
+    book.write_results(
+        [(_item("AAA"), Outcome(ReturnStatus.ALREADY_REFUNDED, "CR123").stamp())]
+    )
+    assert _cell(book.path, "Return Status") == "Placed"
+    assert _cell(book.path, "Detail") == "Already Cancelled & Refunded"
+
+
+def test_resume_reads_the_detail_column_not_the_spec_column(book: ReturnsWorkbook):
+    """Support Needed and Failed both read as "Failed" in the spec column, but
+    only Failed should be re-attempted - so resume must use Detail."""
+    from faym_returns.workbook import existing_outcomes
+
+    book.write_results([(_item("AAA"), Outcome(ReturnStatus.SUPPORT_NEEDED).stamp())])
+    recorded = existing_outcomes(book.path)
+    assert recorded[("OD337974610559997100", "AAA")] == "Support Needed"

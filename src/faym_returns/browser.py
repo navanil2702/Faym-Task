@@ -186,12 +186,26 @@ class Session:
 
     # ----------------------------------------------------------------- helpers
 
-    def new_page(self) -> Page:
-        """Open a fresh tab for the next platform, as the workflow specifies."""
+    def new_page(self, *, close_previous: bool = False) -> Page:
+        """Open a fresh tab and make it current.
+
+        The workflow calls for a new tab per record, so ``close_previous`` lets
+        the caller retire a finished record's tab instead of accumulating one per
+        order across the whole run. The browser context - and therefore the
+        logged-in session - is shared between tabs, so a new tab never means
+        signing in again.
+        """
         assert self.context is not None
+        previous = self.page
         page = self.context.new_page()
         self.page = page
         self.human = Human(page, pacing=self.config.pacing, seed=self.config.seed)
+
+        if close_previous and previous is not None and previous is not page:
+            try:
+                previous.close()
+            except Exception as exc:  # noqa: BLE001 - a stale tab is not fatal
+                log.debug("Could not close the previous tab: %s", exc)
         return page
 
     def goto(self, url: str, *, wait: str = "domcontentloaded") -> None:

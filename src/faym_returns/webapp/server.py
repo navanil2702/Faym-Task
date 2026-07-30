@@ -31,7 +31,7 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
-from .. import eligibility, progress
+from .. import eligibility, otp, progress
 from ..browser import SessionConfig
 from ..humanize import Pacing
 from ..models import Platform
@@ -73,6 +73,7 @@ class RunManager:
         platforms: list[Platform],
         offline: bool,
         fresh: bool,
+        phone: Optional[str],
     ) -> dict:
         with self._lock:
             if self.busy:
@@ -113,6 +114,7 @@ class RunManager:
                     platforms=platforms,
                     offline=offline,
                     fresh=fresh,
+                    phone=phone,
                     artifacts=ROOT / "runs" / stamp,
                 ),
             )
@@ -130,6 +132,7 @@ class RunManager:
         platforms: list[Platform],
         offline: bool,
         fresh: bool,
+        phone: Optional[str],
         artifacts: Path,
     ) -> None:
         try:
@@ -151,7 +154,17 @@ class RunManager:
                 quiet_hours=(0, 0),
                 pacing=Pacing(),
             )
-            report = Orchestrator(book, config, options).run()
+            platform_config = (
+                {p.value.lower(): {"phone": phone} for p in Platform} if phone else {}
+            )
+            report = Orchestrator(
+                book,
+                config,
+                options,
+                platform_config,
+                # In the panel the code arrives from the browser, not stdin.
+                otp_provider=otp.broker.request,
+            ).run()
             self.state["summary"] = {
                 "processed": len(report.results),
                 "planned": len(report.planned),
@@ -311,7 +324,33 @@ async def start_run(request: Request) -> dict:
         orders=[o for o in (body.get("orders") or []) if o],
         platforms=[Platform(p) for p in (body.get("platforms") or []) if p],
         fresh=bool(body.get("fresh")),
+        phone=(body.get("phone") or "").strip() or None,
     )
+
+
+@app.get("/api/otp")
+async def otp_pending() -> dict:
+    """Whether the agent is currently blocked waiting for a one-time code."""
+    return {"pending": otp.broker.pending}
+
+
+@app.post("/api/otp")
+async def supply_otp(request: Request) -> dict:
+    """Hand the agent the code the operator just received."""
+    body = await request.json()
+    code = str(body.get("code") or "")
+    if not any(ch.isdigit() for ch in code):
+        raise HTTPException(400, "That does not look like a one-time code.")
+    if not otp.broker.supply(code):
+        raise HTTPException(409, "The agent is not waiting for a code right now.")
+    return {"status": "accepted"}
+
+
+@app.post("/api/otp/cancel")
+async def cancel_otp() -> dict:
+    """Give up on the code; the agent falls back to a manual sign-in."""
+    otp.broker.cancel()
+    return {"status": "cancelled"}
 
 
 @app.post("/api/stop")
