@@ -13,6 +13,7 @@ from typing import Optional, Sequence
 
 from playwright.sync_api import Locator
 
+from .. import progress
 from ..models import (
     AgentAbort,
     LineItem,
@@ -21,7 +22,15 @@ from ..models import (
     ReturnFlow,
     ReturnStatus,
 )
-from .base import PlatformAdapter, find, find_all, first_group, parse_amount, text_of
+from .base import (
+    PlatformAdapter,
+    find,
+    find_all,
+    first_group,
+    parse_amount,
+    publish_item_finished as _publish_item_finished,
+    text_of,
+)
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +48,7 @@ class FlipkartAdapter(PlatformAdapter):
         self.session.goto(self.sel["urls"]["orders"])
         if self.is_logged_in():
             log.info("Flipkart session restored from the saved profile.")
+            progress.publish("login_ok", platform=self.platform.value, restored=True)
             return
         self.hand_off_login(self.sel["urls"]["login"])
         self.session.goto(self.sel["urls"]["orders"])
@@ -175,7 +185,15 @@ class FlipkartAdapter(PlatformAdapter):
                         log=f"Lost the order view for {order_id} before item {index + 1}.",
                         dry_run=dry_run,
                     ).stamp()
+                    _publish_item_finished(order_id, item, outcomes[item.sku])
                     continue
+            progress.publish(
+                "item_started",
+                order_id=order_id,
+                sku=item.sku,
+                title=item.title_hint,
+                index=item.item_index,
+            )
             try:
                 outcomes[item.sku] = self._process_item(item, dry_run=dry_run)
             except AgentAbort:
@@ -189,6 +207,7 @@ class FlipkartAdapter(PlatformAdapter):
                     screenshots=[shot] if shot else [],
                     dry_run=dry_run,
                 ).stamp()
+            _publish_item_finished(order_id, item, outcomes[item.sku])
         return outcomes
 
     def _process_item(self, item: LineItem, *, dry_run: bool) -> Outcome:

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
 
-from . import eligibility
+from . import eligibility, progress
 from .browser import Session, SessionConfig
 from .models import (
     AgentAbort,
@@ -207,32 +207,39 @@ class Orchestrator:
     # ------------------------------------------------------------------- run
 
     def run(self) -> RunReport:
+        progress.publish(
+            "run_started",
+            live=not self.options.dry_run,
+            offline=self.options.offline,
+            workbook=str(self.workbook.path),
+        )
         to_attempt, decided = self.plan()
         report = RunReport(planned=to_attempt + [i for i, _ in decided])
         report.results.extend(decided)
 
+        self._publish_plan(to_attempt, decided)
+
         if not to_attempt:
             log.info("Nothing needs a browser this run.")
             self._persist(report)
+            progress.publish("run_finished", **self._report_summary(report))
             return report
 
         if self.options.offline:
             for item in to_attempt:
-                report.results.append(
-                    (
-                        item,
-                        Outcome(
-                            status=ReturnStatus.PLANNED,
-                            log=(
-                                "OFFLINE PLAN ONLY: this line item is eligible and "
-                                "would be attempted in a real run. No browser was "
-                                "launched."
-                            ),
-                            dry_run=True,
-                        ).stamp(),
-                    )
-                )
+                outcome = Outcome(
+                    status=ReturnStatus.PLANNED,
+                    log=(
+                        "OFFLINE PLAN ONLY: this line item is eligible and "
+                        "would be attempted in a real run. No browser was "
+                        "launched."
+                    ),
+                    dry_run=True,
+                ).stamp()
+                report.results.append((item, outcome))
+                self._publish_outcome(item, outcome)
             self._persist(report)
+            progress.publish("run_finished", **self._report_summary(report))
             return report
 
         # Group by platform, then by order, so one session handles one platform
@@ -271,6 +278,12 @@ class Orchestrator:
                             len(items),
                             platform.value,
                         )
+                        progress.publish(
+                            "order_started",
+                            order_id=order_id,
+                            platform=platform.value,
+                            items=len(items),
+                        )
                         outcomes = adapter.process_order(items, dry_run=self.options.dry_run)
 
                         for item in items:
@@ -295,10 +308,78 @@ class Orchestrator:
             report.aborted = f"Unexpected session failure: {exc}"
             log.exception("Session failed")
 
+        if report.aborted:
+            progress.publish("aborted", reason=report.aborted)
+
         # Anything planned but never reached stays Pending, deliberately: it is
         # safer to re-attempt later than to record a state we did not observe.
         self._persist(report)
+        progress.publish("run_finished", **self._report_summary(report))
         return report
+
+    # ------------------------------------------------------------- reporting
+
+    def _publish_plan(
+        self,
+        to_attempt: Sequence[LineItem],
+        decided: Sequence[tuple[LineItem, Outcome]],
+    ) -> None:
+        """Emit the full work list up front, so a UI can render it before any
+        browser opens and then fill in outcomes as they land."""
+        rows: list[dict] = []
+        for item in to_attempt:
+            rows.append({**_item_payload(item), "state": "queued"})
+        for item, outcome in decided:
+            rows.append(
+                {
+                    **_item_payload(item),
+                    "state": "done",
+                    "status": outcome.status.value,
+                    "task_status": outcome.task_status.value,
+                    "needs_human": outcome.status.needs_human,
+                    "log": outcome.log,
+                }
+            )
+        rows.sort(key=lambda r: (r["source_row"], r["index"]))
+        orders = len({r["order_id"] for r in rows})
+        progress.publish(
+            "plan_ready",
+            items=rows,
+            orders=orders,
+            total=len(rows),
+            to_attempt=len(to_attempt),
+            decided=len(decided),
+        )
+
+    @staticmethod
+    def _publish_outcome(item: LineItem, outcome: Outcome) -> None:
+        """Announce an outcome the orchestrator settled itself, in the same shape
+        the adapters use, so the UI treats both identically."""
+        progress.publish(
+            "item_finished",
+            order_id=item.order_id,
+            sku=item.sku,
+            title=item.title_hint,
+            index=item.item_index,
+            status=outcome.status.value,
+            task_status=outcome.task_status.value,
+            return_id=outcome.return_id,
+            refund_amount=outcome.refund_amount,
+            needs_human=outcome.status.needs_human,
+            log=outcome.log,
+            screenshots=[],
+        )
+
+    @staticmethod
+    def _report_summary(report: RunReport) -> dict:
+        return {
+            "processed": len(report.results),
+            "planned": len(report.planned),
+            "needs_review": len(report.needs_review),
+            "counts": report.counts,
+            "aborted": report.aborted,
+        }
+
 
     def _persist(self, report: RunReport) -> None:
         if not report.results:
@@ -312,6 +393,23 @@ class Orchestrator:
             stats["order_rows_touched"],
             self.workbook.path,
         )
+
+
+def _item_payload(item: LineItem) -> dict:
+    """Flatten a LineItem into the shape the UI renders."""
+    return {
+        "order_id": item.order_id,
+        "sku": item.sku,
+        "title": item.title_hint,
+        "index": item.item_index,
+        "source_row": item.source_row,
+        "platform": item.platform.value if item.platform else None,
+        "ordered": item.ordered,
+        "window_days": item.return_window_days,
+        "delivery": item.delivery_date.isoformat() if item.delivery_date else None,
+        "delivery_approx": item.delivery_date_is_approx,
+        "url": item.product_url,
+    }
 
 
 #: Recorded statuses that mean "attempt this again on the next run".

@@ -21,7 +21,16 @@ from ..models import (
     ReturnFlow,
     ReturnStatus,
 )
-from .base import PlatformAdapter, find, find_all, first_group, parse_amount, text_of
+from .. import progress
+from .base import (
+    PlatformAdapter,
+    find,
+    find_all,
+    first_group,
+    parse_amount,
+    publish_item_finished as _publish_item_finished,
+    text_of,
+)
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +48,7 @@ class AmazonAdapter(PlatformAdapter):
         self.session.goto(self.sel["urls"]["orders"])
         if self.is_logged_in():
             log.info("Amazon session restored from the saved profile.")
+            progress.publish("login_ok", platform=self.platform.value, restored=True)
             return
         self.hand_off_login(self.sel["urls"]["login"])
         self.session.goto(self.sel["urls"]["orders"])
@@ -161,8 +171,15 @@ class AmazonAdapter(PlatformAdapter):
             return outcomes
 
         flow = self.detect_flow(actionable)
+        progress.publish("flow_detected", order_id=order_id, flow=flow.value)
         if flow is ReturnFlow.BATCH:
-            return self._process_batch(actionable, dry_run=dry_run)
+            outcomes = self._process_batch(actionable, dry_run=dry_run)
+            # The batch wizard covers every item in one pass, so results only
+            # exist once it completes - announce them together at the end.
+            for item in actionable:
+                if item.sku in outcomes:
+                    _publish_item_finished(order_id, item, outcomes[item.sku])
+            return outcomes
         return self._process_sequential(actionable, order_id, dry_run=dry_run)
 
     # ------------------------------------------------------------- batch path
@@ -299,7 +316,15 @@ class AmazonAdapter(PlatformAdapter):
                         log=f"Could not reopen the return wizard for item {index + 1}.",
                         dry_run=dry_run,
                     ).stamp()
+                    _publish_item_finished(order_id, item, outcomes[item.sku])
                     continue
+            progress.publish(
+                "item_started",
+                order_id=order_id,
+                sku=item.sku,
+                title=item.title_hint,
+                index=item.item_index,
+            )
             try:
                 outcomes[item.sku] = self._process_one(item, dry_run=dry_run)
             except AgentAbort:
@@ -313,6 +338,7 @@ class AmazonAdapter(PlatformAdapter):
                     screenshots=[shot] if shot else [],
                     dry_run=dry_run,
                 ).stamp()
+            _publish_item_finished(order_id, item, outcomes[item.sku])
         return outcomes
 
     def _process_one(self, item: LineItem, *, dry_run: bool) -> Outcome:

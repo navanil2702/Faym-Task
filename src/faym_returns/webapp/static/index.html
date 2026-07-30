@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Faym Returns Agent</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #fff; --ink: #16181d; --muted: #6b7280;
+    --line: #e3e3e0; --accent: #1f3864; --ok: #1a7f4b; --warn: #b45309;
+    --bad: #b42318; --skip: #8b8b8b; --chip: #f0f0ee;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1c1f25; --ink: #e8e8e6; --muted: #9aa1ad;
+      --line: #2c3037; --accent: #7aa2e3; --ok: #4ec27f; --warn: #e0a33e;
+      --bad: #f0736a; --skip: #7c828c; --chip: #24282f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 14px 20px; background: var(--panel);
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .spacer { flex: 1; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--skip); display: inline-block; }
+  .dot.on { background: var(--ok); }
+  .dot.wait { background: var(--warn); animation: pulse 1.4s infinite; }
+  .dot.err { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .25 } }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px;
+    color: var(--muted); background: var(--chip); border-radius: 999px; padding: 5px 11px;
+  }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px; display: grid; gap: 16px; }
+  @media (min-width: 1000px) { main { grid-template-columns: 1.45fr 1fr; } }
+  section {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px;
+  }
+  section > h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); margin: 0 0 12px; font-weight: 650;
+  }
+  .full { grid-column: 1 / -1; }
+  label { font-size: 12.5px; color: var(--muted); display: block; margin-bottom: 4px; }
+  input[type=text], input[type=number], input[type=date] {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px;
+    background: var(--bg); color: var(--ink); font-size: 14px; font-family: inherit;
+  }
+  .row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .row > * { flex: 1 1 130px; }
+  .row > .narrow { flex: 0 0 110px; }
+  button {
+    font: inherit; font-size: 14px; padding: 9px 15px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+    cursor: pointer; white-space: nowrap; font-weight: 500;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--bad); border-color: var(--bad); }
+  .totals { display: flex; gap: 20px; flex-wrap: wrap; margin: 12px 0 4px; }
+  .totals div { font-size: 12.5px; color: var(--muted); }
+  .totals b { display: block; font-size: 21px; color: var(--ink); font-weight: 650; }
+  .order { border-top: 1px solid var(--line); padding: 11px 0 8px; }
+  .order:first-of-type { border-top: 0; }
+  .ohead { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .oid { font-family: var(--mono); font-size: 12.5px; }
+  .ometa { font-size: 12px; color: var(--muted); }
+  .item {
+    display: grid; grid-template-columns: 18px 1fr auto; gap: 9px;
+    align-items: baseline; padding: 5px 0 5px 6px; font-size: 13.5px;
+  }
+  .item .ico { text-align: center; font-size: 13px; }
+  .item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .sku { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .item .st { font-size: 12px; color: var(--muted); text-align: right; }
+  .item.skip .name { color: var(--skip); text-decoration: line-through; }
+  .item.active { background: var(--chip); border-radius: 6px; }
+  .item.done .st { color: var(--ok); }
+  .item.review .st { color: var(--bad); }
+  .item.expired .st { color: var(--warn); }
+  .note {
+    font-size: 12px; color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent);
+    border-left: 2px solid var(--warn); padding: 5px 9px; border-radius: 0 5px 5px 0; margin: 4px 0 4px 6px;
+  }
+  #feed {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.65;
+    max-height: 320px; overflow-y: auto; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 7px; padding: 10px;
+  }
+  #feed div { padding: 1px 0; }
+  #feed .t { color: var(--muted); }
+  #feed .k-aborted, #feed .k-stop_requested { color: var(--bad); }
+  #feed .k-item_finished { color: var(--ok); }
+  #feed .k-login_required { color: var(--warn); }
+  .banner {
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-size: 13.5px;
+    border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent);
+  }
+  .banner.bad { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+  .banner b { display: block; margin-bottom: 3px; }
+  .hide { display: none !important; }
+  dialog {
+    border: 1px solid var(--line); border-radius: 11px; background: var(--panel);
+    color: var(--ink); padding: 20px; max-width: 470px; width: calc(100% - 40px);
+  }
+  dialog::backdrop { background: rgb(0 0 0 / .5); }
+  dialog h3 { margin: 0 0 10px; font-size: 16px; }
+  dialog p { font-size: 13.5px; color: var(--muted); margin: 0 0 12px; }
+  .shots { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 9px; }
+  .shots img {
+    width: 108px; height: 68px; object-fit: cover; border: 1px solid var(--line);
+    border-radius: 5px; cursor: pointer;
+  }
+  .countdown { font-family: var(--mono); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Faym Returns</h1>
+  <span class="pill"><span class="dot" id="dotRun"></span><span id="runLabel">idle</span></span>
+  <span class="pill hide" id="loginPill"><span class="dot" id="dotLogin"></span><span id="loginLabel">Chrome</span></span>
+  <span class="pill hide countdown" id="waitPill">⏱ <span id="waitLabel"></span></span>
+  <span class="spacer"></span>
+  <button id="btnDownload" disabled>Download results</button>
+</header>
+
+<main>
+  <div class="full" id="banners"></div>
+
+  <section>
+    <h2>Workbook</h2>
+    <div class="row">
+      <div style="flex:1 1 320px">
+        <label for="path">Path to the .xlsx task list</label>
+        <input type="text" id="path" placeholder="~/Downloads/Faym Status Test Orders.xlsx">
+      </div>
+      <button id="btnLoad">Load</button>
+      <button id="btnPick">Upload…</button>
+      <input type="file" id="file" accept=".xlsx,.xlsm" class="hide">
+    </div>
+    <label style="display:flex;gap:7px;align-items:center;margin-top:10px;cursor:pointer">
+      <input type="checkbox" id="fresh" style="width:auto;flex:0">
+      Start fresh — ignore results already recorded
+    </label>
+
+    <div class="totals" id="totals"></div>
+    <div id="orders"></div>
+  </section>
+
+  <section>
+    <h2>Run</h2>
+    <div class="row" style="margin-bottom:12px">
+      <div class="narrow">
+        <label for="limit">Max items</label>
+        <input type="number" id="limit" min="1" placeholder="all">
+      </div>
+      <div>
+        <label for="today">Treat today as</label>
+        <input type="date" id="today">
+      </div>
+    </div>
+    <div class="row">
+      <button id="btnDry" class="primary" disabled>Dry run</button>
+      <button id="btnLive" disabled>Go live…</button>
+      <button id="btnStop" class="danger hide">Stop</button>
+    </div>
+    <label style="display:flex;gap:7px;align-items:center;margin:11px 0 0;cursor:pointer">
+      <input type="checkbox" id="offline" style="width:auto;flex:0"> Plan only — no browser
+    </label>
+    <p style="font-size:12px;color:var(--muted);margin:9px 0 0">
+      A dry run walks every return flow in a real browser but never clicks the
+      final confirm. Live submits real returns and moves real money.
+    </p>
+
+    <h2 style="margin-top:20px">Activity</h2>
+    <div id="feed"></div>
+    <div class="shots" id="shots"></div>
+  </section>
+</main>
+
+<dialog id="liveDlg">
+  <h3>Submit real returns?</h3>
+  <p>
+    This files returns on the live platform for <b id="liveCount">0</b> line
+    item(s). Returns are hard to reverse once submitted.
+  </p>
+  <label for="confirm">Type <b>place returns</b> to continue</label>
+  <input type="text" id="confirm" autocomplete="off" spellcheck="false">
+  <div class="row" style="margin-top:14px">
+    <button id="btnCancel">Cancel</button>
+    <button id="btnConfirm" class="primary" disabled>Place returns</button>
+  </div>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const CONFIRM_PHRASE = "place returns";
+
+let inspected = null;   // last /api/inspect payload
+let itemState = new Map(); // "order|sku" -> {state, status, needs_human, log, shots}
+let lastSeq = 0;
+let stream = null;
+let waitTimer = null;
+
+// ------------------------------------------------------------------ rendering
+
+const ICON = { queued: "·", active: "⟳", done: "✓", review: "!", skip: "⊘", expired: "◷" };
+
+function fmtMoney(v) {
+  return v == null ? "" : "₹" + Number(v).toLocaleString("en-IN");
+}
+
+function classify(entry) {
+  if (!entry) return "queued";
+  if (entry.state === "active") return "active";
+  if (entry.state !== "done") return "queued";
+  if (entry.needs_human) return "review";
+  if (entry.status === "Not ordered (NA)") return "skip";
+  if (entry.status === "Out of window") return "expired";
+  return "done";
+}
+
+function renderTotals() {
+  if (!inspected) { $("totals").innerHTML = ""; return; }
+  const t = inspected.totals;
+  $("totals").innerHTML = `
+    <div><b>${t.orders}</b>orders</div>
+    <div><b>${t.line_items}</b>line items</div>
+    <div><b>${t.ordered}</b>actually ordered</div>
+    <div><b>${t.attemptable}</b>eligible now</div>`;
+}
+
+function renderOrders() {
+  if (!inspected) { $("orders").innerHTML = ""; return; }
+  $("orders").innerHTML = inspected.orders.map((o) => {
+    const items = o.items.map((it) => {
+      const key = o.order_id + "|" + it.sku;
+      const entry = itemState.get(key);
+      let cls = classify(entry);
+      if (!entry && !it.ordered) cls = "skip";
+      if (!entry && it.ordered && !it.eligible) cls = "expired";
+
+      let status = "";
+      if (entry && entry.state === "done") {
+        status = entry.status + (entry.refund_amount != null ? " · " + fmtMoney(entry.refund_amount) : "");
+      } else if (entry && entry.state === "active") {
+        status = "working…";
+      } else if (!it.ordered) {
+        status = "not ordered";
+      } else if (!it.eligible) {
+        status = "out of window";
+      } else {
+        status = "queued";
+      }
+
+      return `<div class="item ${cls}" title="${esc(entry?.log || it.reason || "")}">
+          <span class="ico">${ICON[cls] || "·"}</span>
+          <span class="name">${esc(it.title || "(untitled)")}
+            <span class="sku">${esc(it.sku)}</span></span>
+          <span class="st">${esc(status)}</span>
+        </div>`;
+    }).join("");
+
+    const notes = (o.notes || []).map((n) => `<div class="note">${esc(n)}</div>`).join("");
+    const meta = [
+      o.platform || "unknown platform",
+      o.window_days ? o.window_days + "d window" : "window unknown",
+      o.delivery ? "delivered " + o.delivery + (o.delivery_approx ? " (approx)" : "") : "delivery unknown",
+      o.items.length + " link(s)",
+    ].join(" · ");
+
+    return `<div class="order">
+        <div class="ohead"><span class="oid">${esc(o.order_id)}</span>
+          <span class="ometa">${esc(meta)}</span></div>
+        ${notes}${items}
+      </div>`;
+  }).join("");
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function banner(id, title, body, bad) {
+  let el = document.getElementById("bn-" + id);
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "bn-" + id;
+    $("banners").appendChild(el);
+  }
+  el.className = "banner" + (bad ? " bad" : "");
+  el.innerHTML = `<b>${esc(title)}</b>${esc(body)}`;
+}
+function clearBanner(id) { document.getElementById("bn-" + id)?.remove(); }
+
+function logLine(ev) {
+  const feed = $("feed");
+  const near = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 30;
+  const div = document.createElement("div");
+  div.className = "k-" + ev.kind;
+  div.innerHTML = `<span class="t">${esc((ev.at || "").slice(11))}</span> ${esc(ev.message || ev.kind)}`;
+  feed.appendChild(div);
+  while (feed.childElementCount > 400) feed.removeChild(feed.firstChild);
+  if (near) feed.scrollTop = feed.scrollHeight;
+}
+
+// -------------------------------------------------------------------- events
+
+function handle(ev) {
+  lastSeq = Math.max(lastSeq, ev.seq || 0);
+  if (ev.message) logLine(ev);
+
+  switch (ev.kind) {
+    case "run_started":
+      setRunning(true, ev.live ? "live run" : "dry run");
+      clearBanner("abort"); clearBanner("login");
+      itemState.clear(); $("shots").innerHTML = "";
+      break;
+
+    case "plan_ready":
+      for (const it of ev.items || []) {
+        itemState.set(it.order_id + "|" + it.sku, {
+          state: it.state, status: it.status, needs_human: it.needs_human, log: it.log,
+        });
+      }
+      renderOrders();
+      break;
+
+    case "login_required":
+      $("loginPill").classList.remove("hide");
+      $("dotLogin").className = "dot wait";
+      $("loginLabel").textContent = "sign in";
+      banner("login", "Sign in to " + (ev.platform || "the platform"),
+        "A Chrome window is open. Type the phone number and OTP there yourself — " +
+        "the agent never handles your credentials. It continues automatically once " +
+        "you're in.");
+      break;
+
+    case "login_ok":
+      $("loginPill").classList.remove("hide");
+      $("dotLogin").className = "dot on";
+      $("loginLabel").textContent = "signed in";
+      clearBanner("login");
+      break;
+
+    case "item_started": {
+      const k = ev.order_id + "|" + ev.sku;
+      itemState.set(k, { ...(itemState.get(k) || {}), state: "active" });
+      renderOrders();
+      break;
+    }
+
+    case "item_finished": {
+      const k = ev.order_id + "|" + ev.sku;
+      itemState.set(k, {
+        state: "done", status: ev.status, needs_human: ev.needs_human,
+        log: ev.log, refund_amount: ev.refund_amount, return_id: ev.return_id,
+      });
+      renderOrders();
+      break;
+    }
+
+    case "waiting":
+      startCountdown(ev.seconds, ev.reason);
+      break;
+    case "wait_tick":
+      showCountdown(ev.remaining, ev.reason);
+      break;
+
+    case "screenshot":
+      addShot(ev.name);
+      break;
+
+    case "aborted":
+      banner("abort", "Run stopped early", ev.reason || "", true);
+      break;
+
+    case "run_finished":
+      setRunning(false, "idle");
+      stopCountdown();
+      $("btnDownload").disabled = false;
+      if (ev.counts) {
+        const parts = Object.entries(ev.counts).map(([k, v]) => `${k} ×${v}`).join(", ");
+        banner("done", "Run finished", `${ev.processed} line item(s): ${parts}.` +
+          (ev.needs_review ? ` ${ev.needs_review} need a human.` : ""));
+      }
+      break;
+  }
+}
+
+function addShot(name) {
+  const img = document.createElement("img");
+  img.src = "/api/screenshot/" + encodeURIComponent(name);
+  img.title = name;
+  img.onclick = () => window.open(img.src, "_blank");
+  $("shots").prepend(img);
+  while ($("shots").childElementCount > 12) $("shots").lastChild.remove();
+}
+
+function startCountdown(seconds, reason) { showCountdown(seconds, reason); }
+function showCountdown(remaining, reason) {
+  $("waitPill").classList.remove("hide");
+  $("waitLabel").textContent = `${Math.ceil(remaining)}s · ${reason || "pausing"}`;
+  clearTimeout(waitTimer);
+  waitTimer = setTimeout(stopCountdown, 4000);
+}
+function stopCountdown() { $("waitPill").classList.add("hide"); }
+
+function setRunning(on, label) {
+  $("dotRun").className = "dot " + (on ? "wait" : "");
+  $("runLabel").textContent = label;
+  $("btnDry").disabled = on || !inspected;
+  $("btnLive").disabled = on || !inspected;
+  $("btnStop").classList.toggle("hide", !on);
+  $("btnLoad").disabled = on;
+  $("btnPick").disabled = on;
+}
+
+function connect() {
+  if (stream) stream.close();
+  stream = new EventSource("/api/events?since=" + lastSeq);
+  stream.onmessage = (e) => handle(JSON.parse(e.data));
+  // EventSource reconnects on its own; `since` means nothing is missed.
+  stream.onerror = () => {};
+}
+
+// ------------------------------------------------------------------- actions
+
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+async function load() {
+  const path = $("path").value.trim();
+  if (!path) return;
+  clearBanner("load");
+  try {
+    const q = new URLSearchParams({ path });
+    if ($("today").value) q.set("today", $("today").value);
+    if ($("fresh").checked) q.set("fresh", "true");
+    inspected = await api("/api/inspect?" + q);
+    itemState.clear();
+    renderTotals(); renderOrders();
+    setRunning(false, "idle");
+    clearBanner("resume");
+    if (inspected.resuming) {
+      banner("resume", "Resuming an earlier run",
+        "Showing the results workbook, which already holds recorded outcomes. " +
+        "Rows marked Done are not listed. Tick “Start fresh” to re-run from the " +
+        "original sheet.");
+    }
+    if (inspected.totals.orders === 0) {
+      banner("empty", "Nothing pending",
+        "No rows in this workbook are marked To Do or Pending.");
+    } else {
+      clearBanner("empty");
+    }
+  } catch (e) {
+    inspected = null; renderTotals(); renderOrders();
+    banner("load", "Could not read that workbook", e.message, true);
+  }
+}
+
+async function run(live, confirmation) {
+  clearBanner("done"); clearBanner("abort");
+  try {
+    await api("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path: inspected.source,
+        live, confirmation,
+        offline: $("offline").checked,
+        fresh: $("fresh").checked,
+        limit: $("limit").value || null,
+        today: $("today").value || null,
+      }),
+    });
+  } catch (e) {
+    banner("abort", "Could not start the run", e.message, true);
+  }
+}
+
+$("btnLoad").onclick = load;
+$("path").addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+$("today").addEventListener("change", () => { if (inspected) load(); });
+$("fresh").addEventListener("change", () => { if (inspected) load(); });
+
+$("btnPick").onclick = () => $("file").click();
+$("file").onchange = async () => {
+  const f = $("file").files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("file", f);
+  try {
+    const up = await api("/api/upload", { method: "POST", body: fd });
+    $("path").value = up.path;
+    await load();
+  } catch (e) {
+    banner("load", "Upload failed", e.message, true);
+  }
+};
+
+$("btnDry").onclick = () => run(false, null);
+
+$("btnLive").onclick = () => {
+  $("liveCount").textContent = inspected?.totals.attemptable ?? 0;
+  $("confirm").value = "";
+  $("btnConfirm").disabled = true;
+  $("liveDlg").showModal();
+};
+$("confirm").addEventListener("input", () => {
+  $("btnConfirm").disabled = $("confirm").value.trim().toLowerCase() !== CONFIRM_PHRASE;
+});
+$("btnCancel").onclick = () => $("liveDlg").close();
+$("btnConfirm").onclick = () => {
+  $("liveDlg").close();
+  run(true, $("confirm").value);
+};
+
+$("btnStop").onclick = async () => {
+  $("btnStop").disabled = true;
+  try { await api("/api/stop", { method: "POST" }); }
+  catch (e) { banner("abort", "Could not stop", e.message, true); }
+  finally { $("btnStop").disabled = false; }
+};
+
+$("btnDownload").onclick = () => { window.location = "/api/results"; };
+
+// ---------------------------------------------------------------- bootstrap
+
+(async function init() {
+  connect();
+  try {
+    const s = await api("/api/status");
+    if (s.busy) setRunning(true, s.live ? "live run" : "dry run");
+    if (s.results) $("btnDownload").disabled = false;
+  } catch {}
+})();
+</script>
+</body>
+</html>

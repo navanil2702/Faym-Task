@@ -36,6 +36,7 @@ from typing import Optional
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
+from . import progress
 from .humanize import Human, Pacing
 from .models import AgentAbort
 
@@ -172,6 +173,7 @@ class Session:
         self.context.set_default_timeout(30000)
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         self.human = Human(self.page, pacing=self.config.pacing, seed=self.config.seed)
+        progress.publish("browser_launched", profile=str(self.config.profile_dir))
         return self
 
     def __exit__(self, *exc_info) -> None:
@@ -226,4 +228,5 @@ class Session:
         except Exception as exc:  # noqa: BLE001 - never fail a run over a screenshot
             log.warning("Screenshot %s failed: %s", label, exc)
             return ""
+        progress.publish("screenshot", label=safe, path=str(path), name=path.name)
         return str(path)
