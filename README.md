@@ -70,7 +70,7 @@ What the panel adds over the CLI:
 |---|---|
 | **Pre-flight review** | Every order expands to its line items with the SKU, window, eligibility and any parse warnings, so a bad row is caught before a browser opens. |
 | **Live progress** | Per-item state (queued → working → outcome), the countdown during the deliberate pauses, and an activity feed, over server-sent events. |
-| **OTP handoff** | When the agent needs a login it says so in the UI and waits; you type the phone number and OTP in the Chrome window it opened. |
+| **OTP prompt** | The agent fills the login form and requests the code, then a dialog asks you for it — no switching to the Chrome window. One click falls back to signing in by hand. |
 | **Stop button** | Aborts cooperatively at the next pause — never mid-submission, so it can't leave a half-filed return behind. |
 | **Failure screenshots** | Thumbnails inline, click to open full size. |
 | **Plan only** | Parses and classifies with no browser at all. The quickest way to sanity-check a freshly-pasted sheet. |
