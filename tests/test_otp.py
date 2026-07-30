@@ -9,6 +9,11 @@ import pytest
 from faym_returns import otp, progress
 from faym_returns.models import AgentAbort
 
+#: Deliberately not a real number. The broker never validates or dials it, and a
+#: real registered mobile in a public repo is a number anyone can request an OTP
+#: against.
+FAKE_PHONE = "9000000000"
+
 
 @pytest.fixture(autouse=True)
 def clean():
@@ -48,7 +53,7 @@ def test_supply_releases_a_waiting_request():
     result: list = []
 
     def wait():
-        result.append(otp.broker.request(platform="Flipkart", phone="9205359199"))
+        result.append(otp.broker.request(platform="Flipkart", phone=FAKE_PHONE))
 
     thread = threading.Thread(target=wait, daemon=True)
     thread.start()
@@ -68,7 +73,7 @@ def test_supply_is_rejected_when_nothing_is_waiting():
 
 def test_pending_describes_what_is_being_waited_on():
     thread = threading.Thread(
-        target=lambda: otp.broker.request(platform="Flipkart", phone="9205359199"),
+        target=lambda: otp.broker.request(platform="Flipkart", phone=FAKE_PHONE),
         daemon=True,
     )
     thread.start()
@@ -78,7 +83,7 @@ def test_pending_describes_what_is_being_waited_on():
         threading.Event().wait(0.02)
     pending = otp.broker.pending
     assert pending["platform"] == "Flipkart"
-    assert pending["phone"] == "9205359199"
+    assert pending["phone"] == FAKE_PHONE
     otp.broker.cancel()
     thread.join(timeout=5)
 
@@ -87,7 +92,7 @@ def test_cancel_yields_no_code_so_the_agent_falls_back():
     result: list = []
     thread = threading.Thread(
         target=lambda: result.append(
-            otp.broker.request(platform="Flipkart", phone="9205359199")
+            otp.broker.request(platform="Flipkart", phone=FAKE_PHONE)
         ),
         daemon=True,
     )
@@ -102,12 +107,12 @@ def test_cancel_yields_no_code_so_the_agent_falls_back():
 
 
 def test_request_times_out_and_returns_none():
-    assert otp.broker.request(platform="Flipkart", phone="9205359199", timeout_s=0) is None
+    assert otp.broker.request(platform="Flipkart", phone=FAKE_PHONE, timeout_s=0) is None
 
 
 def test_request_publishes_so_the_ui_can_prompt():
     listener = progress.bus.subscribe()
-    otp.broker.request(platform="Flipkart", phone="9205359199", timeout_s=0)
+    otp.broker.request(platform="Flipkart", phone=FAKE_PHONE, timeout_s=0)
     kinds = []
     while not listener.empty():
         kinds.append(listener.get_nowait().kind)
@@ -118,4 +123,4 @@ def test_a_stop_request_interrupts_the_wait():
     """An operator hitting Stop must not have to wait out the OTP timeout."""
     progress.stop.request()
     with pytest.raises(AgentAbort, match="OTP"):
-        otp.broker.request(platform="Flipkart", phone="9205359199", timeout_s=30)
+        otp.broker.request(platform="Flipkart", phone=FAKE_PHONE, timeout_s=30)
