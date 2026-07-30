@@ -1,0 +1,16 @@
+# Browser profiles hold live session cookies for real shopping accounts.
+# Committing these would leak account access.
+.profiles/
+
+# Run artifacts: screenshots may contain addresses, phone numbers and order data.
+runs/
+
+# Working copies of the task workbook contain customer PII.
+data/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.DS_Store

@@ -1,0 +1,122 @@
+# Amazon India selector candidates.
+#
+# Amazon exposes a genuine BATCH return flow: "Return or replace items" lists
+# every item on the order with its own checkbox, so one pass through the wizard
+# can cover several line items. The adapter detects that and falls back to the
+# sequential per-item flow when the checkboxes are absent.
+#
+# As with Flipkart, confirm against the live site in one supervised session
+# before a real run.
+
+urls:
+  home: "https://www.amazon.in/"
+  login: "https://www.amazon.in/ap/signin"
+  orders: "https://www.amazon.in/gp/css/order-history"
+  order_search: "https://www.amazon.in/gp/css/order-history?search={order_id}"
+
+logged_in:
+  - "css:#nav-link-accountList[href*='/gp/css/homepage']"
+  - "role:link[name=/your orders/i]"
+  - "css:#nav-orders"
+
+logged_out:
+  - "css:#ap_email"
+  - "css:#ap_password"
+  - "role:heading[name=/sign.?in/i]"
+
+orders_page:
+  order_card:
+    - "css:.order-card"
+    - "css:.js-order-card"
+    - "css:div[class*='order-card']"
+  search_box:
+    - "css:#searchOrdersInput"
+    - "placeholder:/search all orders/i"
+
+order_detail:
+  item_block:
+    - "css:.a-fixed-left-grid.a-spacing-base"
+    - "css:div[class*='shipment'] div[class*='a-fixed-left-grid']"
+  item_title:
+    - "css:a.a-link-normal[href*='/dp/']"
+    - "css:.yohtmlc-product-title"
+  item_status:
+    - "css:.yohtmlc-shipment-status-primaryText"
+    - "css:div[class*='delivery-box'] span"
+
+actions:
+  # Entry point to the return wizard from the order list or detail page.
+  return_entry:
+    - "role:link[name=/return or replace items/i]"
+    - "text:/return or replace items/i"
+    - "role:button[name=/return items/i]"
+  # Presence of these per-item checkboxes is what marks the order as BATCH-able.
+  batch_item_checkbox:
+    - "css:input[type='checkbox'][name*='item']"
+    - "css:.a-checkbox input[type='checkbox']"
+    - "css:input[data-testid*='item-checkbox']"
+  reason_dropdown:
+    - "css:select[name*='reason']"
+    - "role:combobox[name=/reason/i]"
+    - "css:.a-dropdown-container"
+  reason_option:
+    - "css:option"
+    - "css:li[role='option'] a"
+  comment_box:
+    - "css:textarea[name*='comment']"
+    - "placeholder:/comment/i"
+  refund_mode:
+    - "text:/refund to/i"
+    - "css:input[type='radio'][name*='refund']"
+  continue_button:
+    - "role:button[name=/^continue$/i]"
+    - "css:input[type='submit'][value*='Continue']"
+    - "text:/^continue$/i"
+  confirm_button:
+    - "role:button[name=/submit (your )?return/i]"
+    - "text:/confirm your return/i"
+    - "css:input[type='submit'][value*='Submit']"
+
+confirmation:
+  success_markers:
+    - "text:/return (request )?(submitted|created|complete)/i"
+    - "text:/we've? (received|emailed)/i"
+    - "text:/return authorization/i"
+  return_id_patterns:
+    - "return\\s*(?:authorization|id|number)[:\\s#]*([A-Z0-9-]{6,})"
+    - "\\b(D\\d{2}-\\d{7}-\\d{7})\\b"
+    - "\\b(\\d{3}-\\d{7}-\\d{7})\\b"
+  refund_id_patterns:
+    - "refund\\s*(?:id|reference)[:\\s#]*([A-Z0-9-]{6,})"
+
+status_markers:
+  already_refunded:
+    - "refund issued"
+    - "refunded"
+    - "cancelled"
+    - "return complete"
+  not_delivered:
+    - "arriving"
+    - "shipped"
+    - "out for delivery"
+    - "not yet shipped"
+    - "preparing for dispatch"
+  delivered:
+    - "delivered"
+  return_in_progress:
+    - "return started"
+    - "return requested"
+    - "pickup scheduled"
+  window_closed:
+    - "return window closed"
+    - "no longer returnable"
+    - "not eligible for return"
+    - "return period has ended"
+
+preferred_reasons:
+  - "Item defective or doesn't work"
+  - "Performance or quality not adequate"
+  - "Item arrived damaged"
+  - "Wrong item was sent"
+  - "Item is too small or too large"
+  - "No longer needed"

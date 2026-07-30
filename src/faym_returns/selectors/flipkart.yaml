@@ -1,0 +1,149 @@
+# Flipkart selector candidates.
+#
+# Each key holds an ORDERED list of candidates; the first visible match wins.
+# Role- and text-based candidates come first because they survive Flipkart's
+# frequently-rotated hashed class names; the CSS entries are last-resort.
+#
+# IMPORTANT: these were authored from Flipkart's documented/observed flow and
+# MUST be confirmed against the live site in one supervised session before any
+# real run. Any that need fixing are fixed here, not in Python.
+
+urls:
+  home: "https://www.flipkart.com/"
+  login: "https://www.flipkart.com/account/login?ret=/account/orders"
+  orders: "https://www.flipkart.com/account/orders"
+  # Flipkart supports deep-linking the orders list to a single order id.
+  order_search: "https://www.flipkart.com/account/orders?search={order_id}"
+
+logged_in:
+  # Presence of the account menu is the reliable signed-in tell.
+  - "role:link[name=/my orders/i]"
+  - "text:/my orders/i"
+  - "css:div._1EPkIx a[href*='/account/orders']"
+  - "css:a[href*='/account/orders']"
+
+logged_out:
+  - "role:button[name=/^log ?in$/i]"
+  - "text:/enter email\\/mobile number/i"
+  - "css:form input[type='text'][autocomplete='off']"
+
+orders_page:
+  # A card/row per order in the order list.
+  order_card:
+    - "css:div[data-testid='order-card']"
+    - "css:a[href*='/orders/'][href*='OD']"
+    - "css:div._1DuoWI"
+  search_box:
+    - "placeholder:/search your orders/i"
+    - "role:textbox[name=/search/i]"
+    - "css:input[title*='order' i]"
+
+order_detail:
+  # Blocks inside an order detail page, one per line item.
+  item_block:
+    - "css:div[data-testid='order-item']"
+    - "css:div._3Ph9Vd"
+    - "css:div._1OGmuu"
+  item_title:
+    - "css:a[href*='/p/itm']"
+    - "css:div._2-ut7f"
+  # Per-item status copy, e.g. "Delivered on ...", "Cancelled", "Refund completed".
+  item_status:
+    - "css:div._3lPmhL"
+    - "css:div._2aQxSM"
+
+actions:
+  return_button:
+    - "role:button[name=/^return$/i]"
+    - "role:link[name=/^return$/i]"
+    - "text:/^return$/i"
+    - "text:/return item/i"
+    - "css:button:has-text('Return')"
+  # Some items only offer Exchange/Replace - not a return, so treat separately.
+  exchange_only:
+    - "text:/^exchange$/i"
+    - "text:/^replace$/i"
+  reason_dropdown:
+    - "role:combobox[name=/reason/i]"
+    - "text:/select (a )?reason/i"
+    - "css:select"
+    - "css:div[role='button']:has-text('reason')"
+  reason_option:
+    - "css:li[role='option']"
+    - "css:option"
+    - "css:div[role='option']"
+  sub_reason_dropdown:
+    - "text:/select sub ?reason/i"
+    - "role:combobox[name=/sub.?reason/i]"
+  comment_box:
+    - "placeholder:/comment/i"
+    - "css:textarea"
+  refund_mode:
+    - "text:/back to source/i"
+    - "text:/original payment method/i"
+    - "text:/refund to bank account/i"
+    - "css:input[type='radio']"
+  continue_button:
+    - "role:button[name=/^(continue|next|proceed)$/i]"
+    - "text:/^continue$/i"
+    - "css:button:has-text('Continue')"
+  # The final, irreversible submit. Never clicked in dry-run mode.
+  confirm_button:
+    - "role:button[name=/(confirm|submit|place) return/i]"
+    - "text:/confirm return/i"
+    - "text:/submit request/i"
+    - "role:button[name=/^confirm$/i]"
+
+confirmation:
+  # Copy shown once a return has been accepted.
+  success_markers:
+    - "text:/return (request )?(placed|created|submitted|accepted)/i"
+    - "text:/pickup (is )?scheduled/i"
+    - "text:/return id/i"
+  return_id_patterns:
+    - "return\\s*id[:\\s#]*([A-Z0-9-]{6,})"
+    - "request\\s*id[:\\s#]*([A-Z0-9-]{6,})"
+    - "\\b(RET[A-Z0-9]{6,})\\b"
+    - "\\b(CR\\d{10,})\\b"
+  refund_id_patterns:
+    - "\\b(CR\\d{10,})\\b"
+    - "refund\\s*id[:\\s#]*([A-Z0-9-]{6,})"
+
+# Per-item status copy classified into outcomes. Matched case-insensitively
+# against the item block's visible text, in this order.
+status_markers:
+  already_refunded:
+    - "refund complete"
+    - "refund processed"
+    - "refunded"
+    - "cancelled"
+  not_delivered:
+    - "out for delivery"
+    - "shipped"
+    - "in transit"
+    - "packed"
+    - "order confirmed"
+    - "pending"
+    - "arriving"
+  delivered:
+    - "delivered"
+  return_in_progress:
+    - "return request"
+    - "pickup scheduled"
+    - "return accepted"
+    - "return in progress"
+  window_closed:
+    - "return window closed"
+    - "not eligible for return"
+    - "return period"
+    - "no longer returnable"
+
+# Return reasons, tried in order against whatever the dropdown offers.
+preferred_reasons:
+  - "Item is defective"
+  - "Quality issue"
+  - "Product damaged"
+  - "Size/fit issue"
+  - "Wrong item delivered"
+  - "Do not want the product"
+  - "Better price available"
