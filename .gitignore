@@ -5,8 +5,9 @@
 # Run artifacts: screenshots may contain addresses, phone numbers and order data.
 runs/
 
-# Working copies of the task workbook contain customer PII.
-data/
+# Result workbooks are tracked deliberately: they are the assignment's
+# write-back deliverable. Uploads are only duplicates of the source sheet.
+data/uploads/
 
 __pycache__/
 *.py[cod]
