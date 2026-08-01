@@ -31,23 +31,35 @@ logged_out:
 # itself is supplied by the operator (it arrives by call/SMS to the account
 # holder) and the agent types and submits it.
 login:
+  # Verified against the live login page (logged out).
+  #
+  # The phone field carries no placeholder, name, label or stable class - only
+  # hashed classes like `c3Bd2c yXUQVt` - so it can only be reached by scoping
+  # to the form that holds the Request OTP button.
+  #
+  # A bare `form input[type='text']` is NOT a safe fallback here: the page has
+  # two, and the first is Flipkart's header search box. Falling back to it would
+  # type the phone number into the search bar. It is deliberately omitted, so
+  # that if these candidates ever stop matching the agent fails over to a manual
+  # sign-in instead of quietly filling the wrong field.
   phone_input:
+    - "css:form:has(button:has-text('Request OTP')) input[type='text']"
+    - "css:form:has-text('Enter Email/Mobile number') input[type='text']"
     - "placeholder:/enter email\\/mobile number/i"
-    - "role:textbox[name=/email.*mobile/i]"
-    - "css:form input[type='text']"
   request_otp:
     - "role:button[name=/request otp/i]"
     - "text:/request otp/i"
-    - "role:button[name=/^continue$/i]"
-    - "css:button[type='submit']"
+    - "css:form:has-text('Enter Email/Mobile number') button[type='submit']"
   otp_input:
     - "placeholder:/enter otp/i"
     - "role:textbox[name=/otp/i]"
     - "css:input[maxlength='6']"
     - "css:input[type='number']"
+  # Appears only after a code has been sent, so it could not be verified without
+  # triggering a real OTP to the account holder.
   submit:
     - "role:button[name=/^(verify|log ?in|continue)$/i]"
-    - "css:button[type='submit']"
+    - "css:form:has(input[maxlength='6']) button[type='submit']"
 
 orders_page:
   # A card/row per order in the order list.
