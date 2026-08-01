@@ -138,26 +138,26 @@ pip install -r requirements.txt && python3 -m playwright install chromium
 Look at what the agent parsed out of the sheet, without touching a browser:
 
 ```bash
-PYTHONPATH=src python3 -m faym_returns.cli "~/Downloads/Faym Status Test Orders.xlsx" --inspect
+PYTHONPATH=src python3 -m faym_returns.cli "data/Faym Status Test Orders.xlsx" --inspect
 ```
 
 Plan a run offline (no browser, writes a results workbook):
 
 ```bash
-PYTHONPATH=src python3 -m faym_returns.cli "~/Downloads/Faym Status Test Orders.xlsx" --offline
+PYTHONPATH=src python3 -m faym_returns.cli "data/Faym Status Test Orders.xlsx" --offline
 ```
 
 Dry run in a real browser — walks every return flow but never clicks the final
 confirm. **This is the default**; there is no way to submit a return by accident:
 
 ```bash
-PYTHONPATH=src python3 -m faym_returns.cli "~/Downloads/Faym Status Test Orders.xlsx" --limit 1
+PYTHONPATH=src python3 -m faym_returns.cli "data/Faym Status Test Orders.xlsx" --limit 1
 ```
 
 Place returns for real. Requires the explicit flag *and* a typed confirmation:
 
 ```bash
-PYTHONPATH=src python3 -m faym_returns.cli "~/Downloads/Faym Status Test Orders.xlsx" --live --limit 1
+PYTHONPATH=src python3 -m faym_returns.cli "data/Faym Status Test Orders.xlsx" --live --limit 1
 ```
 
 Run the tests:
@@ -227,8 +227,8 @@ Refund amounts are only ever recorded as the platform reports them.
 
 ## Write-back
 
-Results land in a **copy** of your workbook under `data/`. The original file in
-`~/Downloads` is never modified.
+Results land in a **copy** of your workbook under `data/`. The input file is
+never modified.
 
 - **`Line Items`** (new sheet) — one row per SKU: Return ID, Return Status,
   Refund Amount, Task Status, Timestamp, Log, and a `Source Row` back-pointer.
@@ -409,6 +409,21 @@ src/faym_returns/
   selectors/*.yaml  all selectors, as ordered candidate lists
 tests/              104 tests, run against the real dataset's cell contents
 ```
+
+## What's in `data/`
+
+Everything needed to run and verify this, committed so a fresh clone works with
+no setup:
+
+| File | What it is |
+|---|---|
+| `Faym Status Test Orders.xlsx` | The supplied input, byte-for-byte unmodified. Never written to. |
+| `Faym Status Test Orders-results.xlsx` | Output at today's date: 14 out of window, 2 not ordered |
+| `demo-backdated-2026-07-06.xlsx` | Output backdated to when the orders were live: 13 eligible, 1 expired, 2 not ordered |
+
+The test suite reads the committed input, so `pytest` passes on a clean clone.
+
+---
 
 ## Other spreadsheets
 

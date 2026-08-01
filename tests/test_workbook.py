@@ -17,10 +17,10 @@ from faym_returns.workbook import (
     prepare_working_copy,
 )
 
-SOURCE = Path.home() / "Downloads" / "Faym Status Test Orders.xlsx"
+from dataset import SOURCE  # committed in data/, falls back to ~/Downloads
 
 pytestmark = pytest.mark.skipif(
-    not SOURCE.exists(), reason="test dataset not present in ~/Downloads"
+    not SOURCE.exists(), reason="sample workbook not found"
 )
 
 
