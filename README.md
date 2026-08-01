@@ -1,11 +1,131 @@
 # Faym — Automated Multi-Item Returns Agent
 
-A browser agent that reads pending return tasks from Excel, places the returns on
-Amazon or Flipkart, and writes the outcome back **per line item**.
+**Returning things on Flipkart and Amazon is a chore. Somebody has to open the
+site, find the order, find the right product, click Return, pick a reason,
+confirm, then write the return ID into a spreadsheet. Times fifty. This does
+that part.**
 
-Built on Python + Playwright driving the **real installed Google Chrome** with a
-persistent profile, because a genuine browser and a genuine long-lived session
-are the two things that most keep this from reading as a bot.
+You keep a spreadsheet of things that need returning. The agent reads it, opens
+a real Chrome window, and works through the list the way a person would —
+clicking the same buttons, at roughly human speed. When it's done, the results
+are back in your spreadsheet: what got returned, the return ID, the refund
+amount, and what needs a human to look at.
+
+> **New here?** Everything down to *"Where to go next"* is written for anyone.
+> The engineering detail starts after that.
+
+---
+
+## How it works
+
+```mermaid
+flowchart TD
+    A[Your spreadsheet<br/>one row per order] --> B[Split each order<br/>into individual products]
+    B --> C{Worth returning?}
+    C -->|Never actually bought| D[Skip it<br/>note why]
+    C -->|Too late, window closed| E[Skip it<br/>note why]
+    C -->|Yes| F[Open Chrome<br/>find the order]
+    F --> G{What does the site say?}
+    G -->|Already refunded| H[Record it<br/>no return needed]
+    G -->|Not delivered yet| I[Record it<br/>try again later]
+    G -->|Ready to return| J[Click Return<br/>pick reason<br/>pick pickup<br/>confirm]
+    J --> K[Read back the<br/>return ID and refund]
+    D --> L[Write everything<br/>into your spreadsheet]
+    E --> L
+    H --> L
+    I --> L
+    K --> L
+```
+
+The important part is the middle: **it checks before it acts.** If the site says
+an item was already refunded, or hasn't arrived yet, it records that and moves
+on instead of blindly clicking Return.
+
+---
+
+## One order can hold several products
+
+This is the thing that makes the job fiddly, and it's worth seeing concretely.
+
+In the test spreadsheet, order `OD337974610559997100` is a **single row**. But
+that one row has **five product links** crammed into one cell, and one of them is
+marked `NA` — meaning it was looked at but never actually bought.
+
+So the agent splits that one row into five, and treats each product separately:
+
+| Product | Was it bought? | What happened |
+|---|---|---|
+| dolsia regular women blue jeans | Yes | Return attempted |
+| tokyo talkies loose fit women blue jeans | **No — marked `NA`** | **Skipped, flagged for a human** |
+| pinklit wide leg women blue jeans | Yes | Return attempted |
+| vasan women a line maroon midi dress | Yes | Return attempted |
+| shivanshcloset women fit flare maxi dress | Yes | Return attempted |
+
+If the agent had missed that `NA`, it would have tried to return something the
+customer never bought. Across the whole sheet, **7 rows become 16 products, 14 of
+which were really ordered.**
+
+And critically: one product failing never stops the others. Four returns still go
+through even though the fifth was skipped.
+
+---
+
+## What you get back
+
+Your original file is never touched. You get a **copy** with a new sheet in it,
+one line per product. These rows are real output, copied from
+[`data/`](data/) in this repo:
+
+| Product | Return ID | Return status | Detail | Task status |
+|---|---|---|---|---|
+| gulab thar | N/A | Out of window | Out of window | Done |
+| tokyo talkies loose fit women blue jeans | N/A | Failed | Not ordered (NA) | Needs human review |
+| dolsia regular women blue jeans | N/A | *(blank)* | Planned (not attempted) | Pending |
+
+A successfully filed return would read `Placed` with the platform's own return ID
+and refund amount in those columns. There is no such row in this repo yet,
+because no return has been placed against a live site — see
+[Known limits](#known-limits).
+
+- **Return status** — the short answer: *Placed*, *Failed*, or *Out of window*.
+- **Detail** — the fuller reason, because "Failed" alone doesn't tell you whether
+  the item was never bought, hasn't arrived, or needs a support chat.
+- **Task status** — whether it's finished, or whether somebody needs to look.
+
+An order is only marked **Done** once every product on it has a final answer.
+Anything uncertain gets flagged rather than quietly dropped.
+
+---
+
+## Is it safe to run?
+
+Two things worth knowing before anyone runs this:
+
+**It rehearses by default.** Run it normally and it walks through the entire
+return process in a real browser — finds the item, picks the reason, fills the
+form — and then *stops right before the final Confirm button*. Nothing is
+submitted. Actually filing returns takes a deliberate extra flag **and** typing
+the words `place returns` to confirm. You cannot do it by accident.
+
+**Nobody hands it a password.** Logging in needs a one-time code sent to the
+account holder's phone. The agent types the phone number and asks the site to
+send the code, then waits for you to read it out. It never sees or stores a
+password.
+
+---
+
+## Where to go next
+
+- Want to run it? → [Quick start](#quick-start)
+- Want to know what the statuses mean in detail? → [Statuses](#statuses)
+- Worried about getting the account blocked? → [Not getting flagged as a bot](#not-getting-flagged-as-a-bot)
+- **Before anyone runs this for real** → [Read this before the first live run](#read-this-before-the-first-live-run)
+
+---
+
+# Technical reference
+
+Everything below assumes you're comfortable on a command line.
 
 ---
 
