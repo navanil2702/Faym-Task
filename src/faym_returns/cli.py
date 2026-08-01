@@ -20,7 +20,7 @@ from .humanize import Pacing
 from .models import Platform
 from .normalize import explode_rows
 from .orchestrator import Orchestrator, RunOptions
-from .workbook import ReturnsWorkbook, prepare_working_copy
+from .workbook import ReturnsWorkbook, WorkbookError, prepare_working_copy
 
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -135,6 +135,27 @@ def _confirm_live(count: int) -> bool:
     return answer.strip().lower() == "place returns"
 
 
+def _check_columns(book, log) -> bool:
+    """Refuse to run on a sheet we cannot interpret, and say exactly why.
+
+    Reporting "nothing pending" for a sheet whose columns are unrecognised looks
+    like a clean result. Naming the missing columns turns a silent no-op into a
+    fixable message.
+    """
+    missing = book.missing_columns
+    if not missing:
+        return True
+    log.error("This sheet is missing required column(s): %s", ", ".join(missing))
+    log.error("Columns found: %s", ", ".join(sorted(book.headers)) or "(none)")
+    log.error(
+        "Header spelling is matched loosely (case, spaces and punctuation are "
+        "ignored, and common variants like 'OrderID' or 'Product URL' are "
+        "recognised), so a name that still does not match needs renaming in the "
+        "sheet - or use --sheet if the data is on another tab."
+    )
+    return False
+
+
 def _install_interrupt_handler() -> None:
     """Route Ctrl-C into a cooperative stop rather than an abrupt unwind.
 
@@ -179,7 +200,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # --inspect reads the source directly; nothing is copied or written.
     if args.inspect:
-        book = ReturnsWorkbook(source, args.sheet)
+        try:
+            book = ReturnsWorkbook(source, args.sheet)
+        except WorkbookError as exc:
+            log.error("%s", exc)
+            return 2
+        if not _check_columns(book, log):
+            return 2
         items = explode_rows(book.pending_order_rows())
         _print_inspection(items)
         return 0
@@ -193,7 +220,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         log.info("Reusing existing working copy: %s", working)
 
-    book = ReturnsWorkbook(working, args.sheet)
+    try:
+        book = ReturnsWorkbook(working, args.sheet)
+    except WorkbookError as exc:
+        log.error("%s", exc)
+        return 2
+    if not _check_columns(book, log):
+        return 2
 
     options = RunOptions(
         dry_run=not args.live,

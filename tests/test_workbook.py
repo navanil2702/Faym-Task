@@ -212,3 +212,55 @@ def test_resume_reads_the_detail_column_not_the_spec_column(book: ReturnsWorkboo
     book.write_results([(_item("AAA"), Outcome(ReturnStatus.SUPPORT_NEEDED).stamp())])
     recorded = existing_outcomes(book.path)
     assert recorded[("OD337974610559997100", "AAA")] == "Support Needed"
+
+
+# --------------------------------------------- tolerating other people's sheets
+
+
+def _sheet(tmp_path: Path, headers: list, rows: list, title: str = "Sheet1") -> Path:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = title
+    ws.append(headers)
+    for r in rows:
+        ws.append(r)
+    p = tmp_path / "other.xlsx"
+    wb.save(p)
+    return p
+
+
+BASE = ["Order Id", "Product Link", "Status", "Platform", "Return Window", "Delivery date"]
+ROW = ["OD1", "https://www.flipkart.com/x/p/itm1?pid=ABC123", "Pending", "Flipkart",
+       "10 Days", dt.datetime(2026, 7, 20)]
+
+
+def test_header_matching_ignores_case_spacing_and_punctuation():
+    """Hand-maintained sheets drift: OrderID, order_id, Order ID all mean one thing."""
+    from faym_returns.workbook import ReturnsWorkbook as W
+    for variant in ["Order Id", "OrderID", "order_id", "ORDER ID", "Order  Id"]:
+        assert W._normalise(variant) == "orderid"
+
+
+def test_renamed_columns_are_still_found(tmp_path: Path):
+    """A sheet using OrderID and Product URL must still be readable."""
+    p = _sheet(tmp_path, ["OrderID", "Product URL", "Status", "Site",
+                          "Window", "Delivered On"], [ROW])
+    book = ReturnsWorkbook(p)
+    assert book.missing_columns == []
+    assert len(book.pending_order_rows()) == 1
+
+
+def test_unusable_columns_are_reported_not_silently_empty(tmp_path: Path):
+    """The dangerous failure: finding nothing looks identical to having nothing."""
+    p = _sheet(tmp_path, ["Customer", "Notes", "Total"], [["x", "y", 1]])
+    book = ReturnsWorkbook(p)
+    assert set(book.missing_columns) == {"Order Id", "Product Link", "Status", "Platform"}
+
+
+def test_a_missing_sheet_names_the_ones_that_exist(tmp_path: Path):
+    from faym_returns.workbook import WorkbookError
+
+    p = _sheet(tmp_path, BASE, [ROW], title="Orders")
+    with pytest.raises(WorkbookError, match="Sheets present: Orders"):
+        ReturnsWorkbook(p)
+    assert ReturnsWorkbook(p, "Orders").missing_columns == []

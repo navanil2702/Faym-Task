@@ -36,8 +36,59 @@ from .models import (
     TaskStatus,
 )
 
+class WorkbookError(Exception):
+    """The workbook cannot be interpreted - wrong sheet, or unusable columns."""
+
+
 ORDERS_SHEET_DEFAULT = "Sheet1"
 LINE_ITEMS_SHEET = "Line Items"
+
+#: Without these the sheet cannot be interpreted at all: no way to find the
+#: order, know which products it holds, tell whether it is still pending, or
+#: know which site to drive.
+REQUIRED_COLUMNS = ("Order Id", "Product Link", "Status", "Platform")
+
+#: Normalised header key -> the canonical name the rest of the code uses.
+#: Keys are lowercase and stripped of spaces and punctuation, so "Order ID",
+#: "order_id" and "OrderId" all land on the same entry.
+COLUMN_ALIASES = {
+    "orderid": "Order Id",
+    "orderno": "Order Id",
+    "ordernumber": "Order Id",
+    "productlink": "Product Link",
+    "productlinks": "Product Link",
+    "producturl": "Product Link",
+    "producturls": "Product Link",
+    "product": "Product Link",
+    "status": "Status",
+    "taskstatus": "Status",
+    "platform": "Platform",
+    "site": "Platform",
+    "marketplace": "Platform",
+    "returnwindow": "Return Window",
+    "window": "Return Window",
+    "deliverydate": "Delivery date",
+    "delivered": "Delivery date",
+    "deliveredon": "Delivery date",
+    "orderdate": "Order date",
+    "ordereddate": "Order date",
+    "noofproduct": "No of Product",
+    "noofproducts": "No of Product",
+    "quantity": "No of Product",
+    "qty": "No of Product",
+    "amount": "Amount",
+    "ordertotal": "Amount",
+    "total": "Amount",
+    "refundid": "Refund ID",
+    "returnid": "Refund ID",
+    "returnstatus": "Return Status",
+    "refundamount": "Refund Amount",
+    "timestamp": "Timestamp",
+    "log": "Log",
+    "address": "Address",
+    "contactnumber": "Contact Number",
+    "phone": "Contact Number",
+}
 
 #: Columns of the generated per-line-item sheet, in order.
 LINE_ITEM_COLUMNS = [
@@ -95,17 +146,49 @@ class ReturnsWorkbook:
         # data_only=True resolves any formula cells to their cached values for
         # reading; the write pass reloads without it so formulas survive.
         self._values = openpyxl.load_workbook(self.path, data_only=True)
+        if orders_sheet not in self._values.sheetnames:
+            # A raw KeyError traceback tells an operator nothing useful; naming
+            # the tabs that do exist tells them exactly what to pass to --sheet.
+            raise WorkbookError(
+                f"This workbook has no sheet named {orders_sheet!r}. "
+                f"Sheets present: {', '.join(self._values.sheetnames)}. "
+                "Pass the right one with --sheet."
+            )
         self._sheet = self._values[orders_sheet]
         self.headers = self._read_headers(self._sheet)
 
     @staticmethod
-    def _read_headers(sheet) -> dict[str, int]:
-        """Map header text to 1-based column index."""
+    def _normalise(name: object) -> str:
+        """Fold a header to a comparison key: lowercase, no spaces or punctuation."""
+        return "".join(ch for ch in str(name or "").lower() if ch.isalnum())
+
+    @classmethod
+    def _read_headers(cls, sheet) -> dict[str, int]:
+        """Map header text to its 1-based column index, tolerating spelling drift.
+
+        Hand-maintained sheets rename columns: ``Order Id`` becomes ``OrderID``,
+        ``Product Link`` becomes ``Product URL``. Matching header text exactly
+        meant a renamed column silently read as absent, and the agent reported
+        nothing to do rather than saying it could not understand the sheet - the
+        worst kind of failure, because it looks like success.
+
+        So headers are matched on a normalised key and mapped back to the
+        canonical name the rest of the code expects. Unrecognised columns are
+        kept under their original name so nothing is lost.
+        """
         headers: dict[str, int] = {}
         for idx, cell in enumerate(sheet[1], start=1):
-            if cell.value is not None and str(cell.value).strip():
-                headers[str(cell.value).strip()] = idx
+            raw = cell.value
+            if raw is None or not str(raw).strip():
+                continue
+            key = cls._normalise(raw)
+            headers[COLUMN_ALIASES.get(key, str(raw).strip())] = idx
         return headers
+
+    @property
+    def missing_columns(self) -> list[str]:
+        """Required columns this sheet does not provide, under any known spelling."""
+        return [c for c in REQUIRED_COLUMNS if c not in self.headers]
 
     def _cell_value(self, row: int, header: str):
         col = self.headers.get(header)

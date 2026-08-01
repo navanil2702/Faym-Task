@@ -407,8 +407,28 @@ src/faym_returns/
     flipkart.py     sequential per-item flow
     amazon.py       batch detection + sequential fallback
   selectors/*.yaml  all selectors, as ordered candidate lists
-tests/              100 tests, run against the real dataset's cell contents
+tests/              104 tests, run against the real dataset's cell contents
 ```
+
+## Other spreadsheets
+
+It is not tied to the test file. Verified working on data it had never seen:
+Amazon orders with ASIN links, Amazon and Flipkart mixed in one sheet, dates as
+plain strings or `20/07/2026`, `10Days` with no space, a window given as a bare
+number, rows where every link is `NA`, rows with no usable link, unknown
+platforms, and rows already marked `Done` (correctly skipped).
+
+**Column names are the contract**, but matching is loose: case, spaces and
+punctuation are ignored, and common variants are recognised — `OrderID`,
+`order_id`, `Product URL`, `Site`, `Qty`, `Delivered On` all resolve. Four
+columns are required: `Order Id`, `Product Link`, `Status`, `Platform`.
+
+If a required column genuinely cannot be found, the agent **refuses to run and
+names what is missing** rather than reporting nothing to do — a silent empty
+result is indistinguishable from a clean one. Same for a wrong sheet name: it
+lists the tabs that do exist.
+
+---
 
 ## Known limits
 
