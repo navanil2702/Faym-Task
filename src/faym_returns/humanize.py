@@ -69,34 +69,27 @@ class Human:
     # ------------------------------------------------------------------ timing
 
     def _sleep(self, seconds: float, *, reason: Optional[str] = None) -> None:
-        """Sleep in slices so a stop request can land and a UI can count down.
+        """Sleep, in slices long enough for an interrupt to land.
 
-        The long between-item pauses are where a run spends most of its time, so
-        they are also the only place worth making interruptible - and the safest,
-        since a pause is never mid-submission.
+        The between-item pauses are where a run spends most of its wall clock,
+        so they are the only place worth making interruptible - and the safest,
+        because a pause is never mid-submission. ``reason`` marks those long
+        pauses; short ones are simply checked once and slept through.
         """
         remaining = max(0.0, seconds)
         if remaining <= 0:
             return
 
-        # Short pauses are not worth slicing; just check once and sleep.
         if remaining <= self._SLICE or reason is None:
             progress.check_stop()
             self.page.wait_for_timeout(remaining * 1000)
             return
 
-        last_tick = -1.0
         while remaining > 0:
             progress.check_stop()
             slice_seconds = min(self._SLICE, remaining)
             self.page.wait_for_timeout(slice_seconds * 1000)
             remaining -= slice_seconds
-            # Emit at most one countdown per second.
-            if remaining > 0 and (last_tick < 0 or last_tick - remaining >= 1.0):
-                last_tick = remaining
-                progress.publish(
-                    "wait_tick", remaining=round(remaining, 1), reason=reason
-                )
 
     def think(self, scale: float = 1.0) -> None:
         """Pause as though reading the current view."""
@@ -122,14 +115,12 @@ class Human:
                 self.pacing.between_items_min, self.pacing.between_items_max
             )
             reason = "between items"
-        progress.publish("waiting", seconds=round(seconds, 1), reason=reason)
         self._sleep(seconds, reason=reason)
 
     def between_orders(self) -> None:
         seconds = self._rng.uniform(
             self.pacing.between_orders_min, self.pacing.between_orders_max
         )
-        progress.publish("waiting", seconds=round(seconds, 1), reason="between orders")
         self._sleep(seconds, reason="between orders")
 
     # ----------------------------------------------------------------- pointer

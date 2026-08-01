@@ -48,52 +48,6 @@ python3 -m pytest -q
 
 ---
 
-## Control panel (web UI)
-
-For operators who shouldn't have to touch a CLI:
-
-```bash
-python3 serve.py
-```
-
-Then open **http://127.0.0.1:8000**. From there you can point at a workbook (or
-upload one), review the parsed line items *before* anything runs, start a dry run
-or a live run, watch progress stream in as it happens, and download the results.
-
-It drives the same `Orchestrator` the CLI does — same browser behaviour, same
-safety rails, same Excel write-back — so nothing behaves differently depending on
-which front end you use.
-
-What the panel adds over the CLI:
-
-| | |
-|---|---|
-| **Pre-flight review** | Every order expands to its line items with the SKU, window, eligibility and any parse warnings, so a bad row is caught before a browser opens. |
-| **Live progress** | Per-item state (queued → working → outcome), the countdown during the deliberate pauses, and an activity feed, over server-sent events. |
-| **OTP prompt** | The agent fills the login form and requests the code, then a dialog asks you for it — no switching to the Chrome window. One click falls back to signing in by hand. |
-| **Stop button** | Aborts cooperatively at the next pause — never mid-submission, so it can't leave a half-filed return behind. |
-| **Failure screenshots** | Thumbnails inline, click to open full size. |
-| **Plan only** | Parses and classifies with no browser at all. The quickest way to sanity-check a freshly-pasted sheet. |
-
-Two behaviours worth knowing:
-
-- **It binds to `127.0.0.1` on purpose.** The panel can drive a browser holding a
-  live logged-in shopping session, so it must not be reachable from the network.
-  There is no authentication because there is no remote access.
-- **One run at a time.** A second start request gets a `409`. Two concurrent
-  browser sessions against one account is a reliable way to get that account
-  flagged, so the server refuses rather than queueing.
-
-A live run needs the phrase `place returns` typed into the confirm dialog, exactly
-as the CLI does. Without it the API returns `400` and nothing is submitted.
-
-**"Start fresh"** controls whether you resume. Left off, the panel and the run
-both read the existing results workbook, so rows already marked Done are not
-re-attempted — and the counts you see are the counts that will run. Tick it to
-re-run from the original sheet.
-
----
-
 ## Read this before the first live run
 
 **1. The selectors need one supervised pass against the live sites.**
@@ -111,10 +65,10 @@ past all of them. The agent correctly refuses all 14 items. Use
 orders were live.
 
 **3. Login: the agent drives the form, you supply the code.**
-Give it the mobile number (`--phone` on the CLI, or the field in the panel) and it
-fills the login form and presses *Request OTP* itself. The code cannot be
-automated — it is delivered out of band to the account holder — so the agent asks
-you for it (terminal prompt, or a dialog in the panel), then types and submits it.
+Give it the mobile number with `--phone` and it fills the login form and presses
+*Request OTP* itself. The code cannot be automated — it is delivered out of band
+to the account holder — so the agent prompts you for it at the terminal, then
+types and submits it.
 
 Omit the number and it falls back to letting you sign in entirely by hand; it also
 falls back automatically if the login form can't be located, so a changed login
@@ -280,6 +234,12 @@ bundled-Chromium fallback path.
   returns at 04:00.
 - Never parallelised against one account.
 
+**Interrupting a run**
+Ctrl-C sets a stop flag rather than unwinding immediately, so the run finishes
+the line item in flight and stops at the next pause - never between clicking
+Confirm and reading back the return ID. Whatever was gathered is still written
+to Excel. A second Ctrl-C stops at once.
+
 **On challenge**
 A captcha or block page **aborts the session** rather than retrying. Hammering a
 challenge is what turns a soft flag into a hard ban. Unfinished items stay
@@ -312,26 +272,22 @@ the delays for debugging and should never point at a live site.
 ## Layout
 
 ```
-serve.py            start the control panel (no PYTHONPATH needed)
 src/faym_returns/
-  cli.py            command-line entry point; dry-run by default
+  cli.py            entry point; dry-run by default
   orchestrator.py   run loop, planning, partial-success handling
   normalize.py      messy-cell parsing, order row -> line items
   eligibility.py    return-window pre-filter
   workbook.py       Excel read + per-line-item write-back
   browser.py        persistent Chrome session, fingerprint, challenge detection
   humanize.py       timing, pointer paths, typing rhythm
-  progress.py       run event bus + cooperative stop signal
-  otp.py            one-time-code providers (terminal prompt / web panel)
+  progress.py       cooperative stop signal (Ctrl-C aborts at a safe pause)
+  otp.py            one-time-code provider for the OTP sign-in
   platforms/
     base.py         adapter contract, selector resolution
     flipkart.py     sequential per-item flow
     amazon.py       batch detection + sequential fallback
   selectors/*.yaml  all selectors, as ordered candidate lists
-  webapp/
-    server.py       FastAPI control panel; runs the agent on a worker thread
-    static/         single-page UI, no build step
-tests/              124 tests, run against the real dataset's cell contents
+tests/              100 tests, run against the real dataset's cell contents
 ```
 
 ## Known limits

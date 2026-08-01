@@ -131,24 +131,6 @@ def first_group(patterns: Iterable[str], haystack: str) -> str:
     return ""
 
 
-def publish_item_finished(order_id: str, item: LineItem, outcome: Outcome) -> None:
-    """Announce one line item's outcome, for a watching UI."""
-    progress.publish(
-        "item_finished",
-        order_id=order_id,
-        sku=item.sku,
-        title=item.title_hint,
-        index=item.item_index,
-        status=outcome.status.value,
-        task_status=outcome.task_status.value,
-        return_id=outcome.return_id,
-        refund_amount=outcome.refund_amount,
-        needs_human=outcome.status.needs_human,
-        log=outcome.log,
-        screenshots=[Path(s).name for s in outcome.screenshots if s],
-    )
-
-
 def parse_amount(text: str) -> Optional[float]:
     """Pull a rupee amount out of platform copy like '₹1,234' or 'Rs. 953.00'."""
     match = re.search(r"(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d{1,2})?)", text, re.I)
@@ -263,7 +245,6 @@ class PlatformAdapter(ABC):
         if phone_field is None:
             return False
 
-        progress.publish("login_started", platform=self.platform.value, phone=phone)
         self.human.type_text(phone_field, phone)
         self.human.micro()
 
@@ -302,7 +283,6 @@ class PlatformAdapter(ABC):
         # The site may take a moment to establish the session after submitting.
         for _ in range(10):
             if self.is_logged_in():
-                progress.publish("login_ok", platform=self.platform.value)
                 return True
             self.page.wait_for_timeout(1500)
         return False
@@ -334,12 +314,6 @@ class PlatformAdapter(ABC):
             f"\n  Waiting up to {timeout_s // 60} minutes for sign-in to complete...\n"
         )
         print(banner, flush=True)
-        progress.publish(
-            "login_required",
-            platform=self.platform.value,
-            url=login_url,
-            timeout_s=timeout_s,
-        )
 
         deadline = time.time() + timeout_s
         while time.time() < deadline:
@@ -348,7 +322,6 @@ class PlatformAdapter(ABC):
             try:
                 if self.is_logged_in():
                     print("  Sign-in detected. Continuing.\n", flush=True)
-                    progress.publish("login_ok", platform=self.platform.value)
                     self.human.think()
                     return
             except Exception:  # noqa: BLE001 - page may be navigating

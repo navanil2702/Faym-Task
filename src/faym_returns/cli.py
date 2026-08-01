@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import signal
 import sys
 from pathlib import Path
 
+from . import progress
 from .browser import SessionConfig
 from .humanize import Pacing
 from .models import Platform
@@ -133,6 +135,34 @@ def _confirm_live(count: int) -> bool:
     return answer.strip().lower() == "place returns"
 
 
+def _install_interrupt_handler() -> None:
+    """Route Ctrl-C into a cooperative stop rather than an abrupt unwind.
+
+    A bare KeyboardInterrupt lands wherever the agent happens to be - possibly
+    between clicking Confirm and reading the return ID, which would leave a
+    return filed with nothing recorded against it. Setting the stop flag instead
+    makes the run wind down at the next pause, which is never mid-submission,
+    and the outcomes gathered so far are still written back.
+
+    A second Ctrl-C restores the default behaviour, so an operator is never
+    trapped waiting for a wedged run.
+    """
+
+    def handler(_signum, _frame):
+        if progress.stop.requested:
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            print("\n  Second interrupt - stopping immediately.\n", flush=True)
+            raise KeyboardInterrupt
+        progress.stop.request()
+        print(
+            "\n  Stopping after the current line item finishes, so a return is "
+            "never left half-submitted.\n  Press Ctrl-C again to stop now.\n",
+            flush=True,
+        )
+
+    signal.signal(signal.SIGINT, handler)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
@@ -217,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
             log.info("Cancelled. Nothing was submitted.")
             return 1
 
+    progress.reset()
+    _install_interrupt_handler()
     report = orchestrator.run()
 
     print()
