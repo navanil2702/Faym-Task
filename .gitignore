@@ -6,8 +6,14 @@
 runs/
 
 # Result workbooks are tracked deliberately: they are the assignment's
-# write-back deliverable. Uploads are only duplicates of the source sheet.
+# write-back deliverable. Uploads are only duplicates of the source sheet, and
+# --sample output is regenerable at any time by re-running the sample.
 data/uploads/
+data/sample-run-results.xlsx
+
+# Output of a discovery run, named for the moment it ran. Contains real order
+# ids and refund amounts from whoever's account was signed in.
+returns-*.xlsx
 
 __pycache__/
 *.py[cod]

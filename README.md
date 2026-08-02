@@ -41,13 +41,23 @@ The important part is the middle: **it checks before it acts.** If the site says
 an item was already refunded, or hasn't arrived yet, it records that and moves
 on instead of blindly clicking Return.
 
+Results are written **as each order finishes**, not banked up to the end — so a
+crash or a Ctrl-C can never leave a return filed on the platform with no record
+of it in your file.
+
+> **There is also a mode that skips the spreadsheet** and works out what to
+> return by reading your orders page directly. That's an extension, not the main
+> path — see [Discovering orders without a spreadsheet](#discovering-orders-without-a-spreadsheet).
+
 ---
 
 ## One order can hold several products
 
 This is the thing that makes the job fiddly, and it's worth seeing concretely.
+It bites both ways in: an order card on the site lists several products, and a
+spreadsheet row crams several product links into one cell.
 
-In the test spreadsheet, order `OD337974610559997100` is a **single row**. But
+In the sample spreadsheet, order `OD337974610559997100` is a **single row**. But
 that one row has **five product links** crammed into one cell, and one of them is
 marked `NA` — meaning it was looked at but never actually bought.
 
@@ -99,7 +109,7 @@ Anything uncertain gets flagged rather than quietly dropped.
 
 ## Is it safe to run?
 
-Two things worth knowing before anyone runs this:
+Three things worth knowing before anyone runs this:
 
 **It rehearses by default.** Run it normally and it walks through the entire
 return process in a real browser — finds the item, picks the reason, fills the
@@ -107,16 +117,24 @@ form — and then *stops right before the final Confirm button*. Nothing is
 submitted. Actually filing returns takes a deliberate extra flag **and** typing
 the words `place returns` to confirm. You cannot do it by accident.
 
+**The sample data can never file a real return.** `--sample` and `--live` are
+refused together: those orders belong to somebody else.
+
 **Nobody hands it a password.** Logging in needs a one-time code sent to the
 account holder's phone. The agent types the phone number and asks the site to
 send the code, then waits for you to read it out. It never sees or stores a
 password.
+
+Before it submits anything, it tells you how many line items are about to have
+returns filed and waits for you to type the confirmation. `--limit 1` narrows
+the first real run to a single item.
 
 ---
 
 ## Where to go next
 
 - Want to run it? → [Quick start](#quick-start)
+- Want to know how it decides what to return? → [Where the work list comes from](#where-the-work-list-comes-from)
 - Want to know what the statuses mean in detail? → [Statuses](#statuses)
 - Worried about getting the account blocked? → [Not getting flagged as a bot](#not-getting-flagged-as-a-bot)
 - **Before anyone runs this for real** → [Read this before the first live run](#read-this-before-the-first-live-run)
@@ -135,30 +153,80 @@ Everything below assumes you're comfortable on a command line.
 pip install -r requirements.txt && python3 -m playwright install chromium
 ```
 
-Look at what the agent parsed out of the sheet, without touching a browser:
+### Sample run
+
+`--sample` runs the agent against the bundled sample spreadsheet
+(`data/Faym Status Test Orders.xlsx`) with no path to type. It drives a real
+browser through the return flows, stopping before every final confirm:
 
 ```bash
-PYTHONPATH=src python3 -m faym_returns.cli "data/Faym Status Test Orders.xlsx" --inspect
+PYTHONPATH=src python3 -m faym_returns.cli --sample --limit 1
 ```
 
-Plan a run offline (no browser, writes a results workbook):
+Two things happen automatically, because otherwise the sample demonstrates
+nothing:
+
+- **It backdates to 2026-07-06.** Every row in the sample sheet is long past its
+  return window at today's date, so without this the agent would correctly
+  refuse all 14 items and never open a page. Override with `--today`.
+- **`--live` is refused.** Those are somebody else's orders.
+
+Results go to `data/sample-run-results.xlsx`, which is untracked — the committed
+outputs are never overwritten by a sample run.
+
+Same thing without a browser, and a look at what the parser made of the sheet:
 
 ```bash
-PYTHONPATH=src python3 -m faym_returns.cli "data/Faym Status Test Orders.xlsx" --offline
+PYTHONPATH=src python3 -m faym_returns.cli --sample --offline
 ```
-
-Dry run in a real browser — walks every return flow but never clicks the final
-confirm. **This is the default**; there is no way to submit a return by accident:
 
 ```bash
-PYTHONPATH=src python3 -m faym_returns.cli "data/Faym Status Test Orders.xlsx" --limit 1
+PYTHONPATH=src python3 -m faym_returns.cli --sample --inspect
 ```
 
-Place returns for real. Requires the explicit flag *and* a typed confirmation:
+### Your own spreadsheet
+
+The main path. Results go to `<name>-results.xlsx` **beside your file**; the
+source is never modified. Plan it offline first, no browser:
 
 ```bash
-PYTHONPATH=src python3 -m faym_returns.cli "data/Faym Status Test Orders.xlsx" --live --limit 1
+PYTHONPATH=src python3 -m faym_returns.cli ~/orders.xlsx --offline
 ```
+
+Then a dry run in a real browser — walks every return flow but never clicks the
+final confirm. **This is the default**; there is no way to submit by accident:
+
+```bash
+PYTHONPATH=src python3 -m faym_returns.cli ~/orders.xlsx --phone 9876543210 --limit 1
+```
+
+Place the returns for real. Needs the flag *and* a typed confirmation, which
+tells you the exact line-item count first:
+
+```bash
+PYTHONPATH=src python3 -m faym_returns.cli ~/orders.xlsx --phone 9876543210 --live --limit 1
+```
+
+### Discovering orders without a spreadsheet
+
+`--discover` skips the sheet and builds the work list by signing in and walking
+*My Orders*. Use it when a sheet has gone stale, or when there isn't one. It is
+an **extension beyond the specified workflow**, which is spreadsheet-driven, so
+it is never reached by default:
+
+```bash
+PYTHONPATH=src python3 -m faym_returns.cli --discover --platform Flipkart --phone 9876543210 --limit 1
+```
+
+`--platform` is required, because with no sheet nothing else says which site to
+sign into. Pass it twice for both. The walk covers **30 days** of order history
+and at most **25 orders per site** (`--discover-days`, `--discover-max-orders`);
+`--limit` caps line items across the whole run.
+
+Results are written to `returns-<timestamp>.xlsx` in the directory you ran from,
+created fresh — there is no input file to copy. It uses the *input* format's own
+columns, so what a discovery run produces can be fed straight back in as the
+input to a later spreadsheet run.
 
 Run the tests:
 
@@ -178,11 +246,17 @@ against the live DOM, because doing so requires signing into the real account.
 Run `--limit 1` in dry-run mode, watch the browser, and fix whatever misses in the
 YAML. That is a config edit, not a code change.
 
-**2. Every order in the test dataset is already out of window.**
+It applies double to the `discovery:` block, used only under `--discover`. If it
+matches nothing the run reports *"No order cards matched"* and stops — an empty
+result, not a wrong one. Watch the first dry run and check the count it logs
+against what you can see on the page yourself.
+
+**2. Every order in the sample dataset is already out of window.**
 The delivery dates are late June / early July 2026 with 7–10 day windows; today is
-past all of them. The agent correctly refuses all 14 items. Use
-`--today 2026-07-06` to exercise the pipeline as it would have behaved when the
-orders were live.
+past all of them. The agent correctly refuses all 14 items. `--sample` backdates
+to `2026-07-06` for you, exercising the pipeline as it would have behaved when
+the orders were live. None of this touches a real run: your own workbook is
+judged against the real date unless you pass `--today` yourself.
 
 **3. Login: the agent drives the form, you supply the code.**
 Give it the mobile number with `--phone` and it fills the login form and presses
@@ -200,11 +274,50 @@ are never logged, written to the workbook, or persisted.
 
 ---
 
-## How the data is interpreted
+## Where the work list comes from
+
+The spreadsheet is the input. `--discover` is a second way in, off by default.
+Both produce `LineItem`s, and from that point the code is identical: the same
+eligibility pre-check, the same platform adapters, the same write-back.
+
+| | Spreadsheet (default) | `--discover` |
+|---|---|---|
+| Work list from | a `Product Link` cell | the account's orders page |
+| Order ids | the `Order Id` column | read off the page |
+| Delivery date | the `Delivery date` cell | read off the card, when shown |
+| Return window | the `Return Window` cell | page copy when stated, else deferred |
+| Output file | a copy of your input | created fresh |
+
+### Discovering from the account
+
+The walk is bounded on purpose — an order history can be years deep and a run
+that reads all of it is a crawl, not a returns pass. It stops at
+`--discover-days` (30), `--discover-max-orders` (25) per site, and three pages of
+history.
+
+Cards are filtered on their visible copy before anything is opened: kept when the
+platform shows a return is plausible, dropped when it already reads *refunded*,
+*cancelled*, *return requested* or *window closed*. **That filter is a cheap
+pre-pass, not the verdict.** Every card that survives is opened and each product
+on it classified properly, which is what actually decides the outcome. The filter
+can only cost you a return it declined to look at — it can never cause one to be
+filed.
+
+The `Return window` the spec asks for is read off the card when the platform
+states it (`"10 days return policy"`), and feeds the same eligibility pre-check
+the spreadsheet's own column feeds. When the page doesn't say, the item carries a
+note recording that and the platform's check on the order page is left to decide
+— the sheet path behaves identically for a row with an empty window cell.
+
+Discovered orders are written into the results workbook *before* any return is
+attempted. That is what gives each line item a `Source Row`, so the roll-up, the
+write-back and resuming all work exactly as they do for a spreadsheet run.
+
+### Reading a spreadsheet
 
 The source sheet is **order-level** — one row per order, with every product URL
 crammed into a single `Product Link` cell — but the spec requires an outcome per
-SKU. So the agent explodes each order row into line items. On the test dataset,
+SKU. So the agent explodes each order row into line items. On the sample dataset,
 **7 order rows become 16 line items, 14 of them actually ordered.**
 
 Two conventions in that cell carry real meaning:
@@ -227,15 +340,28 @@ Refund amounts are only ever recorded as the platform reports them.
 
 ## Write-back
 
-Results land in a **copy** of your workbook under `data/`. The input file is
-never modified.
+Results land in a **copy** of your workbook, written beside the original as
+`<name>-results.xlsx`; the input file is never modified. A `--discover` run has
+nothing to copy, so it **creates** `returns-<timestamp>.xlsx` in the working
+directory instead. `--working-copy` puts either somewhere else.
 
-- **`Line Items`** (new sheet) — one row per SKU: Return ID, Return Status,
-  Refund Amount, Task Status, Timestamp, Log, and a `Source Row` back-pointer.
-  This is the record of truth.
-- **`Sheet1`** (your original) — each order row gets a rolled-up summary in the
-  existing `Refund ID` / `Return Status` / `Refund Amount` / `Timestamp` / `Log`
-  columns, so the sheet stays readable at a glance.
+Both files have the same two sheets:
+
+- **`Line Items`** — one row per SKU: Return ID, Return Status, Refund Amount,
+  Task Status, Timestamp, Log, and a `Source Row` back-pointer. This is the
+  record of truth.
+- **`Sheet1`** — one row per order with a rolled-up summary in the
+  `Refund ID` / `Return Status` / `Refund Amount` / `Timestamp` / `Log` columns,
+  so the file stays readable at a glance. For a spreadsheet run this is your
+  original sheet, annotated. Under `--discover` it is written from what was
+  found, using the *input* format's columns — so it can be fed back in.
+
+**Written per order, not banked to the end.** Each record's outcomes are saved
+as soon as that order finishes, and again on the way out of the run — including
+under a second Ctrl-C, which is a `KeyboardInterrupt` and escapes ordinary
+exception handling. A return that has been filed on the platform but not
+recorded anywhere is the expensive failure: the money has moved and the only
+trace is on the site. The window where that can be true is one order wide.
 
 Re-running updates rows in place, keyed on `(Order ID, SKU)`. It never appends
 duplicates.
@@ -375,11 +501,15 @@ the delays for debugging and should never point at a live site.
 | Flag | Effect |
 |---|---|
 | `--live` | Actually submit. Off by default; also needs a typed confirmation. |
-| `--offline` | Plan only; no browser. |
-| `--inspect` | Print parsed line items and exit. Writes nothing. |
-| `--limit N` | Cap line items this run. Use `--limit 1` for the first live test. |
+| `--discover` | Build the work list from the account's orders page instead of a sheet. Takes no workbook; needs `--platform`. |
+| `--sample` | Run against the bundled sample sheet, no path needed. Backdates to 2026-07-06; cannot be combined with `--live`. |
+| `--offline` | Plan only; no browser. Needs a sheet — there is nothing to plan offline without one. |
+| `--inspect` | Print parsed line items and exit. Writes nothing. Sheet runs only. |
+| `--limit N` | Cap line items this run, across every site. Use `--limit 1` for the first live run. |
 | `--order ID` | Restrict to one order (repeatable). |
-| `--platform` | Restrict to `Amazon` or `Flipkart` (repeatable). |
+| `--platform` | Which site(s) to drive (repeatable). A filter for a sheet run; **required** with `--discover`. |
+| `--discover-days N` | How far back `--discover` reads order history (default 30). |
+| `--discover-max-orders N` | Ceiling on orders `--discover` takes from each site (default 25). |
 | `--today DATE` | Override today's date for the window check. |
 | `--no-resume` | Re-attempt items that already hold a final status. |
 | `--phone N` | Mobile number for OTP sign-in. The agent fills the form and requests the code, then asks you for it. |
@@ -393,21 +523,21 @@ the delays for debugging and should never point at a live site.
 
 ```
 src/faym_returns/
-  cli.py            entry point; dry-run by default
-  orchestrator.py   run loop, planning, partial-success handling
+  cli.py            entry point; picks the input path, dry-run by default
+  orchestrator.py   run loop, triage, partial-success handling
   normalize.py      messy-cell parsing, order row -> line items
   eligibility.py    return-window pre-filter
-  workbook.py       Excel read + per-line-item write-back
+  workbook.py       Excel read, per-line-item write-back, from-scratch output
   browser.py        persistent Chrome session, fingerprint, challenge detection
   humanize.py       timing, pointer paths, typing rhythm
   progress.py       cooperative stop signal (Ctrl-C aborts at a safe pause)
   otp.py            one-time-code provider for the OTP sign-in
   platforms/
-    base.py         adapter contract, selector resolution
+    base.py         adapter contract, selector resolution, order discovery
     flipkart.py     sequential per-item flow
     amazon.py       batch detection + sequential fallback
   selectors/*.yaml  all selectors, as ordered candidate lists
-tests/              104 tests, run against the real dataset's cell contents
+tests/              153 tests; the browser is stubbed, the data is real
 ```
 
 ## What's in `data/`
@@ -423,11 +553,16 @@ no setup:
 
 The test suite reads the committed input, so `pytest` passes on a clean clone.
 
+`--sample` writes to `sample-run-results.xlsx` here, which is untracked — it is
+regenerable at any time and never overwrites the two committed outputs above.
+Runs against your own workbook write nowhere near this directory.
+
 ---
 
 ## Other spreadsheets
 
-It is not tied to the test file. Verified working on data it had never seen:
+Nothing about the spreadsheet path is tied to the sample file. Verified working
+on data it had never seen:
 Amazon orders with ASIN links, Amazon and Flipkart mixed in one sheet, dates as
 plain strings or `20/07/2026`, `10Days` with no space, a window given as a bare
 number, rows where every link is `NA`, rows with no usable link, unknown
@@ -447,7 +582,16 @@ lists the tabs that do exist.
 
 ## Known limits
 
-- **Selectors are unverified against the live DOM.** See point 1 above.
+- **Selectors are unverified against the live DOM.** See point 1 above. The
+  `discovery:` blocks are the newest of them and the least exercised.
+- **Discovery has never run against a real order history.** The card parsing is
+  tested against stubbed pages, so its logic is covered, but which selectors
+  match and what a real card's copy says are open questions until one supervised
+  run answers them.
+- **Under `--discover`, a card showing no date is kept, not skipped.** Unknown is
+  not the same as expired, so the `--discover-days` cutoff cannot see it and the
+  item goes through to the platform's own check. That errs toward opening one
+  order too many rather than missing a returnable item.
 - **The eligibility check is a pre-filter, not the authority.** It only rejects
   items that are clearly expired, and defers to the platform whenever a date is
   approximate or missing.
