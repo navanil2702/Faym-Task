@@ -70,7 +70,14 @@ class ReturnStatus(str, Enum):
     NOT_ORDERED = "Not ordered (NA)"
     FAILED = "Failed"
     PLANNED = "Planned (not attempted)"
-    """Offline planning only - eligible and queued, but no browser was launched."""
+    """Eligible and queued, but nothing was submitted.
+
+    Both non-submitting modes land here: offline planning, which launches no
+    browser, and a dry run, which walks the whole flow and stops at the confirm.
+    Neither placed a return, so neither may record a final status - a dry run
+    that claimed ``Placed`` would also make the next live run skip the very
+    items it had just rehearsed.
+    """
 
     @property
     def is_final(self) -> bool:

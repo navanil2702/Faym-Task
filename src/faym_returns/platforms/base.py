@@ -14,7 +14,7 @@ from playwright.sync_api import Locator, Page
 
 from .. import progress
 from ..browser import Session
-from ..models import AgentAbort, LineItem, Outcome, Platform, ReturnFlow
+from ..models import AgentAbort, LineItem, Outcome, Platform, ReturnFlow, ReturnStatus
 from ..normalize import is_product_url, parse_date, sku_of, title_hint_of
 from ..otp import DEFAULT_TIMEOUT_S, OtpProvider
 
@@ -24,6 +24,16 @@ SELECTOR_DIR = Path(__file__).resolve().parent.parent / "selectors"
 
 _ROLE_RE = re.compile(r"^role:(?P<role>[a-z]+)(?:\[name=(?P<name>.+)\])?$", re.I)
 _REGEX_RE = re.compile(r"^/(?P<body>.*)/(?P<flags>[a-z]*)$")
+
+#: Labels that mark the final, irreversible submit on either platform. No
+#: intermediate wizard step is ever allowed to click a control matching this,
+#: however loose the selector that found it. See ``click_intermediate``.
+SUBMIT_LABEL_RE = re.compile(
+    r"(confirm|submit|place|create)\s+(your\s+)?(return|request|refund)"
+    r"|return\s+request"
+    r"|^\s*(confirm|submit)\s*$",
+    re.I,
+)
 
 
 def load_selectors(name: str) -> dict:
@@ -210,6 +220,84 @@ class PlatformAdapter(ABC):
         dry_run: bool = True,
     ) -> dict[str, Outcome]:
         ...
+
+    # --------------------------------------------------------- wizard clicking
+
+    def click_intermediate(self, locator: Locator, *, what: str) -> bool:
+        """Click a mid-wizard control, refusing anything that looks like the submit.
+
+        Selectors are candidate lists that end in deliberately loose CSS, and
+        loose CSS overlaps. Playwright's ``has-text`` is a *substring* match, so
+        a fallback like ``button:has-text('Confirm')`` on the pickup-address step
+        also matches "Confirm Return" - the final, irreversible submit. An
+        intermediate step that reached it would file a real return in the middle
+        of a dry run, which is the one thing a dry run exists to make impossible.
+
+        So the control's own label is checked before the click, whatever selector
+        found it. This holds in live runs too: reaching the submit from the
+        pickup step would submit before the remaining steps had been filled in.
+
+        Returns whether the click happened.
+        """
+        label = ""
+        try:
+            label = (locator.inner_text(timeout=2000) or "").strip()
+        except Exception:  # noqa: BLE001 - an unreadable label is not a submit
+            label = ""
+
+        if label and SUBMIT_LABEL_RE.search(label):
+            log.warning(
+                "Refusing to click %r for the %s step: that label is the final "
+                "submit, not an intermediate control. Skipping the step rather "
+                "than risking an unintended return.",
+                label[:60],
+                what,
+            )
+            return False
+
+        try:
+            self.human.click(locator)
+            return True
+        except Exception:  # noqa: BLE001 - already selected, or not clickable
+            return False
+
+    # ---------------------------------------------------------------- dry runs
+
+    def dry_run_outcome(
+        self,
+        *,
+        reached_confirm: bool,
+        detail: str,
+        screenshot: Optional[str] = None,
+    ) -> Outcome:
+        """The result of walking a return flow that was deliberately not submitted.
+
+        Never ``PLACED``. Nothing was placed, so recording it would put a false
+        ``Placed`` in the spec's ``Return status`` column - but the worse problem
+        is that ``PLACED`` is a *final* status. Resume skips final items, so a
+        rehearsal that claimed success would make the very next ``--live`` run
+        skip every item the rehearsal had just walked, and place nothing.
+
+        ``PLANNED`` says what is true: eligible, walked, not attempted. It writes
+        a blank ``Return status`` with a ``Pending`` task status, and it requeues.
+        A flow that never reached its confirm step is ``FAILED`` instead - also
+        non-final, but flagged for a human, because that is a broken flow rather
+        than a successful rehearsal.
+        """
+        status = ReturnStatus.PLANNED if reached_confirm else ReturnStatus.FAILED
+        outcome = "reached the final confirm step" if reached_confirm else (
+            "never reached a confirm step, so the flow may have changed"
+        )
+        return Outcome(
+            status=status,
+            log=(
+                f"DRY RUN: walked the return flow for this item and {outcome}. "
+                f"{detail} Nothing was submitted - re-run with --live to place "
+                "the return."
+            ),
+            screenshots=[screenshot] if screenshot else [],
+            dry_run=True,
+        ).stamp()
 
     # ---------------------------------------------------------------- discovery
 

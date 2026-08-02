@@ -117,6 +117,11 @@ form — and then *stops right before the final Confirm button*. Nothing is
 submitted. Actually filing returns takes a deliberate extra flag **and** typing
 the words `place returns` to confirm. You cannot do it by accident.
 
+That's enforced twice over. Stopping before the confirm relies on the agent
+knowing which button *is* the confirm — so no mid-flow step is allowed to click
+a control labelled like the final submit, whatever selector found it. A loose
+selector on the pickup step can't reach past the guard and file a return.
+
 **The sample data can never file a real return.** `--sample` and `--live` are
 refused together: those orders belong to somebody else.
 
@@ -391,9 +396,16 @@ Two mappings are judgement calls worth stating:
 - **`Already Cancelled & Refunded` → `Placed`.** A return and refund do exist for
   that line item; the agent simply didn't have to create them. `Failed` would be
   plainly wrong.
-- **`Planned (not attempted)` → blank.** Plan-only mode attempts nothing, so
-  claiming `Failed` would assert a failure that never happened. Blank, paired with
-  a Task status of `Pending`, says exactly what is true.
+- **`Planned (not attempted)` → blank.** Neither a dry run nor an offline plan
+  submits anything, so claiming `Failed` would assert a failure that never
+  happened. Blank, paired with a Task status of `Pending`, says exactly what is
+  true.
+
+**A dry run never records `Placed`.** It walks the whole flow and stops at the
+confirm, so the item is `Planned` — which is also *non-final*, so the next
+`--live` run picks it straight back up. Recording `Placed` would be false in the
+spec's own column, and worse, would make `--live` skip every item the rehearsal
+had just walked, placing nothing at all.
 
 Resume decisions read `Detail`, not `Return status` — `Support Needed` and
 `Failed` both collapse to `Failed`, but only the latter should be re-attempted.
@@ -537,7 +549,7 @@ src/faym_returns/
     flipkart.py     sequential per-item flow
     amazon.py       batch detection + sequential fallback
   selectors/*.yaml  all selectors, as ordered candidate lists
-tests/              153 tests; the browser is stubbed, the data is real
+tests/              171 tests; the browser is stubbed, the data is real
 ```
 
 ## What's in `data/`

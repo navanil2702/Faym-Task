@@ -231,17 +231,14 @@ class AmazonAdapter(PlatformAdapter):
         if dry_run:
             shot = self.session.screenshot("amazon-batch-dryrun-preconfirm")
             for item in selected:
-                outcomes[item.sku] = Outcome(
-                    status=ReturnStatus.PLACED if confirm else ReturnStatus.FAILED,
-                    log=(
-                        "DRY RUN: batch flow covered this item and "
-                        f"{'reached' if confirm else 'did not reach'} the submit "
-                        f"step. Reason: {reasons.get(item.sku) or 'none'}. "
-                        "Nothing was submitted."
+                outcomes[item.sku] = self.dry_run_outcome(
+                    reached_confirm=confirm is not None,
+                    detail=(
+                        "Amazon batch flow covered this item. Reason: "
+                        f"{reasons.get(item.sku) or 'none'}."
                     ),
-                    screenshots=[shot] if shot else [],
-                    dry_run=True,
-                ).stamp()
+                    screenshot=shot,
+                )
             return outcomes
 
         if confirm is None:
@@ -358,17 +355,13 @@ class AmazonAdapter(PlatformAdapter):
         confirm = find(self.page, self.s("actions", "confirm_button"), timeout=6000)
 
         if dry_run:
-            shot = self.session.screenshot(f"{item.order_id}-{item.sku}-dryrun-preconfirm")
-            return Outcome(
-                status=ReturnStatus.PLACED if confirm else ReturnStatus.FAILED,
-                log=(
-                    "DRY RUN: walked Amazon's sequential return flow and "
-                    f"{'reached' if confirm else 'did not reach'} the submit step. "
-                    f"Reason: {reason or 'none'}. Nothing was submitted."
+            return self.dry_run_outcome(
+                reached_confirm=confirm is not None,
+                detail=f"Amazon sequential flow. Reason: {reason or 'none'}.",
+                screenshot=self.session.screenshot(
+                    f"{item.order_id}-{item.sku}-dryrun-preconfirm"
                 ),
-                screenshots=[shot] if shot else [],
-                dry_run=True,
-            ).stamp()
+            )
 
         if confirm is None:
             shot = self.session.screenshot(f"{item.order_id}-{item.sku}-no-confirm")
@@ -417,10 +410,7 @@ class AmazonAdapter(PlatformAdapter):
             element = find(self.page, self.s("actions", key), timeout=2200)
             if element is None:
                 continue
-            try:
-                self.human.click(element)
-            except Exception:  # noqa: BLE001 - already selected, or not clickable
-                continue
+            self.click_intermediate(element, what=key)
 
     def _select_reason(self, dropdown: Locator) -> str:
         try:

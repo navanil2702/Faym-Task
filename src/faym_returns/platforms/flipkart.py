@@ -306,18 +306,13 @@ class FlipkartAdapter(PlatformAdapter):
         confirm = find(self.page, self.s("actions", "confirm_button"), timeout=6000)
 
         if dry_run:
-            shot = self.session.screenshot(f"{item.order_id}-{item.sku}-dryrun-preconfirm")
-            reached = "reached the final confirm step" if confirm else "did not reach a confirm step"
-            return Outcome(
-                status=ReturnStatus.FAILED if confirm is None else ReturnStatus.PLACED,
-                log=(
-                    f"DRY RUN: walked the return flow for this item and {reached}. "
-                    f"Reason selected: {reason or 'none available'}. Nothing was "
-                    "submitted - re-run with --live to actually place the return."
+            return self.dry_run_outcome(
+                reached_confirm=confirm is not None,
+                detail=f"Reason selected: {reason or 'none available'}.",
+                screenshot=self.session.screenshot(
+                    f"{item.order_id}-{item.sku}-dryrun-preconfirm"
                 ),
-                screenshots=[shot] if shot else [],
-                dry_run=True,
-            ).stamp()
+            )
 
         if confirm is None:
             shot = self.session.screenshot(f"{item.order_id}-{item.sku}-no-confirm")
@@ -455,24 +450,15 @@ class FlipkartAdapter(PlatformAdapter):
         """
         option = find(self.page, self.s("actions", "pickup_option"), timeout=2500)
         if option is not None:
-            try:
-                self.human.click(option)
-            except Exception:  # noqa: BLE001 - already selected, or not clickable
-                pass
+            self.click_intermediate(option, what="pickup option")
 
         slot = find(self.page, self.s("actions", "pickup_slot"), timeout=2000)
         if slot is not None:
-            try:
-                # First offered slot: the earliest collection Flipkart proposes.
-                self.human.click(slot)
-            except Exception:  # noqa: BLE001
-                pass
+            # First offered slot: the earliest collection Flipkart proposes.
+            self.click_intermediate(slot, what="pickup slot")
 
         confirm_address = find(
             self.page, self.s("actions", "pickup_address_confirm"), timeout=2500
         )
         if confirm_address is not None:
-            try:
-                self.human.click(confirm_address)
-            except Exception:  # noqa: BLE001
-                pass
+            self.click_intermediate(confirm_address, what="pickup address")
