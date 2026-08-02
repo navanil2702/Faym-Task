@@ -72,6 +72,44 @@ orders_page:
     - "role:textbox[name=/search/i]"
     - "css:input[title*='order' i]"
 
+# Used only by a run with no spreadsheet, which builds its work list by walking
+# My Orders. These decide which cards are worth opening; the per-item flow still
+# makes the real call on every item that survives.
+discovery:
+  order_id_patterns:
+    - "\\b(OD\\d{15,})\\b"
+  # Copy that means a return is plausibly still open on this card.
+  returnable_markers:
+    - "delivered"
+    - "return"
+  # Copy that means the card is already settled - no point opening it.
+  skip_markers:
+    - "refund complete"
+    - "refund processed"
+    - "refunded"
+    - "cancelled"
+    - "return request"
+    - "pickup scheduled"
+    - "return accepted"
+    - "return window closed"
+    - "no longer returnable"
+    - "not eligible for return"
+  # Feeds the same eligibility pre-check the sheet's Return Window column feeds.
+  # Often absent from the order list, in which case the item defers to the
+  # platform's own check on the order page.
+  return_window_patterns:
+    - "([0-9]{1,2})\\s*days?\\s*(?:easy\\s*)?return"
+    - "return\\s*(?:window|policy)[^0-9]{0,12}([0-9]{1,2})\\s*days?"
+    - "returnable\\s*(?:with)?in\\s*([0-9]{1,2})\\s*days?"
+  # Capture group 1 is fed to the same date parser the spreadsheet path uses.
+  delivered_on_patterns:
+    - "delivered on ([0-9]{1,2}\\s+[A-Za-z]{3,9}(?:,?\\s+[0-9]{4})?)"
+    - "delivered ([0-9]{1,2}\\s+[A-Za-z]{3,9}(?:,?\\s+[0-9]{4})?)"
+  next_page:
+    - "role:button[name=/next/i]"
+    - "text:/show more orders/i"
+    - "css:a[href*='page=']:has-text('Next')"
+
 order_detail:
   # Blocks inside an order detail page, one per line item.
   item_block:

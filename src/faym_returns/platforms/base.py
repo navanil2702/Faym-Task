@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import re
 from abc import ABC, abstractmethod
@@ -14,6 +15,7 @@ from playwright.sync_api import Locator, Page
 from .. import progress
 from ..browser import Session
 from ..models import AgentAbort, LineItem, Outcome, Platform, ReturnFlow
+from ..normalize import is_product_url, parse_date, sku_of, title_hint_of
 from ..otp import DEFAULT_TIMEOUT_S, OtpProvider
 
 log = logging.getLogger(__name__)
@@ -208,6 +210,209 @@ class PlatformAdapter(ABC):
         dry_run: bool = True,
     ) -> dict[str, Outcome]:
         ...
+
+    # ---------------------------------------------------------------- discovery
+
+    #: Pages of order history to walk before stopping. An account can hold years
+    #: of orders; a run that walks all of them is a crawl, not a returns pass.
+    discovery_max_pages = 3
+
+    def discover_returnable(
+        self,
+        *,
+        max_orders: int = 25,
+        within_days: int = 30,
+        today: Optional[dt.date] = None,
+    ) -> list[LineItem]:
+        """Walk My Orders and build line items from what the account actually holds.
+
+        This is the input path for a run with no spreadsheet: order ids, SKUs and
+        delivery dates all come from the live page. Two bounds keep it honest -
+        ``within_days`` stops the walk falling off the end of an order history,
+        and ``max_orders`` caps how much one session takes on.
+
+        Cards are filtered on their visible copy: kept when the platform shows a
+        return is possible, dropped when it already shows a refund, a return in
+        flight or a closed window. That filter is a *cheap pre-pass*, not the
+        verdict - each surviving item still goes through the adapter's normal
+        classification, which is what actually decides the outcome.
+        """
+        today = today or dt.date.today()
+        self.session.goto(self.sel["urls"]["orders"])
+        self.human.think()
+        self.session.assert_not_challenged()
+
+        items: list[LineItem] = []
+        seen: set[str] = set()
+        cards_seen = 0
+
+        for page_index in range(self.discovery_max_pages):
+            if progress.stop.requested or len(seen) >= max_orders:
+                break
+            if page_index:
+                if not self._open_next_orders_page():
+                    break
+                self.human.think()
+
+            self.human.scroll(400)
+            cards = find_all(self.page, self.s("orders_page", "order_card"), timeout=10000)
+            if cards is None:
+                log.warning(
+                    "No order cards matched on %s. Either the account has no "
+                    "orders, or the orders_page.order_card selectors need a look.",
+                    self.platform.value,
+                )
+                break
+
+            for index in range(cards.count()):
+                if len(seen) >= max_orders:
+                    break
+                cards_seen += 1
+                card = cards.nth(index)
+                found = self._line_items_from_card(card, today=today, within_days=within_days)
+                if found is None or not found:
+                    continue
+                order_id = found[0].order_id
+                if order_id in seen:
+                    continue
+                seen.add(order_id)
+                items.extend(found)
+
+        log.info(
+            "Discovery on %s: %d order card(s) examined, %d order(s) kept, "
+            "%d line item(s) to consider.",
+            self.platform.value,
+            cards_seen,
+            len(seen),
+            len(items),
+        )
+        return items
+
+    def _line_items_from_card(
+        self,
+        card: Locator,
+        *,
+        today: dt.date,
+        within_days: int,
+    ) -> Optional[list[LineItem]]:
+        """One order card -> its line items, or None when the card is not usable."""
+        text = text_of(card)
+        if not text:
+            return None
+
+        order_id = first_group(self.s("discovery", "order_id_patterns"), text)
+        if not order_id:
+            # The id is sometimes only in the link, not the visible copy.
+            order_id = first_group(
+                self.s("discovery", "order_id_patterns"), " ".join(self._hrefs_in(card))
+            )
+        if not order_id:
+            return None
+
+        if self._card_is_settled(text):
+            return None
+        if not self._card_looks_returnable(text):
+            return None
+
+        delivery_date, approx = self._delivery_date_from(text)
+        if delivery_date and (today - delivery_date).days > within_days:
+            # Older than the window we were asked to look at. Ordering on these
+            # pages is newest-first, so this is also the natural stopping point.
+            return None
+
+        # The order list states a return window only sometimes ("7 days return
+        # policy"). It feeds the same local pre-filter the spreadsheet's own
+        # Return Window column feeds; when the page does not say, the note
+        # records that rather than leaving a bare blank, and the platform's own
+        # check on the order page remains the authority either way.
+        window_days = self._return_window_from(text)
+        notes = ["Discovered from the live orders page; no spreadsheet row."]
+        if window_days is None:
+            notes.append(
+                "Return window not stated on the orders page; eligibility "
+                "deferred to the platform."
+            )
+
+        # source_row is filled in later, when these orders are recorded into the
+        # results workbook; discovery has no sheet to point back at.
+        found: list[LineItem] = []
+        for href in self._hrefs_in(card):
+            if not is_product_url(href, self.platform):
+                continue
+            sku = sku_of(href)
+            if not sku or any(i.sku == sku for i in found):
+                continue
+            found.append(
+                LineItem(
+                    source_row=0,
+                    item_index=len(found),
+                    order_id=order_id,
+                    platform=self.platform,
+                    sku=sku,
+                    product_url=href,
+                    title_hint=title_hint_of(href),
+                    delivery_date=delivery_date,
+                    delivery_date_is_approx=approx,
+                    return_window_days=window_days,
+                    parse_notes=notes,
+                )
+            )
+        return found
+
+    @staticmethod
+    def _hrefs_in(card: Locator) -> list[str]:
+        try:
+            return [
+                h
+                for h in card.locator("a").evaluate_all(
+                    "els => els.map(e => e.href || '')"
+                )
+                if h
+            ]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _card_looks_returnable(self, text: str) -> bool:
+        markers = self.s("discovery", "returnable_markers")
+        haystack = text.lower()
+        return any(m.lower() in haystack for m in markers) if markers else True
+
+    def _card_is_settled(self, text: str) -> bool:
+        """True when the card already shows a refund, a return or a closed window."""
+        haystack = text.lower()
+        return any(m.lower() in haystack for m in self.s("discovery", "skip_markers"))
+
+    def _return_window_from(self, text: str) -> Optional[int]:
+        """Day count from copy like '10 days return policy', when the page says."""
+        for pattern in self.s("discovery", "return_window_patterns"):
+            match = re.search(pattern, text, re.I)
+            if match:
+                try:
+                    return int(match.group(1))
+                except (ValueError, IndexError):
+                    continue
+        return None
+
+    def _delivery_date_from(self, text: str) -> tuple[Optional[dt.date], bool]:
+        for pattern in self.s("discovery", "delivered_on_patterns"):
+            match = re.search(pattern, text, re.I)
+            if match:
+                return parse_date(match.group(1))
+        return None, False
+
+    def _open_next_orders_page(self) -> bool:
+        target = find(self.page, self.s("discovery", "next_page"), timeout=4000)
+        if target is None:
+            return False
+        try:
+            self.human.click(target)
+            self.page.wait_for_load_state("domcontentloaded")
+            self.session.assert_not_challenged()
+            return True
+        except AgentAbort:
+            raise
+        except Exception:  # noqa: BLE001
+            return False
 
     # -------------------------------------------------------------------- login
 

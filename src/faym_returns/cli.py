@@ -12,6 +12,7 @@ import datetime as dt
 import logging
 import signal
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import progress
@@ -20,9 +21,47 @@ from .humanize import Pacing
 from .models import Platform
 from .normalize import explode_rows
 from .orchestrator import Orchestrator, RunOptions
-from .workbook import ReturnsWorkbook, WorkbookError, prepare_working_copy
+from .workbook import (
+    ReturnsWorkbook,
+    WorkbookError,
+    create_results_workbook,
+    prepare_working_copy,
+)
 
-DEFAULT_ROOT = Path(__file__).resolve().parent.parent.parent
+#: The bundled sample sheet, and the date at which its orders were still inside
+#: their return windows. Every row in it is long expired at today's date, so a
+#: sample run backdates by default - otherwise the agent correctly refuses all
+#: 14 items and never demonstrates anything.
+SAMPLE_NAME = "Faym Status Test Orders.xlsx"
+SAMPLE_TODAY = dt.date(2026, 7, 6)
+
+
+def _checkout_root() -> Path | None:
+    """The repo checkout this package is running from, or None if installed.
+
+    Everything that used to hang off a hardcoded ``parent.parent.parent`` now
+    goes through here, so a real run against somebody's own spreadsheet does not
+    quietly write into a source tree that may not exist.
+    """
+    root = Path(__file__).resolve().parent.parent.parent
+    if (root / "data").is_dir() and (root / "src" / "faym_returns").is_dir():
+        return root
+    return None
+
+
+def _state_root() -> Path:
+    """Where the Chrome profile and screenshots go when not told otherwise."""
+    return _checkout_root() or (Path.home() / ".faym-returns")
+
+
+def find_sample_workbook() -> Path | None:
+    """Locate the bundled sample sheet: in the checkout, else in ~/Downloads."""
+    root = _checkout_root()
+    candidates = []
+    if root is not None:
+        candidates.append(root / "data" / SAMPLE_NAME)
+    candidates.append(Path.home() / "Downloads" / SAMPLE_NAME)
+    return next((c for c in candidates if c.exists()), None)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,21 +69,54 @@ def build_parser() -> argparse.ArgumentParser:
         prog="faym-returns",
         description="Place e-commerce returns from an Excel task list, per line item.",
     )
-    parser.add_argument("workbook", type=Path, help="Source .xlsx with return tasks")
+    parser.add_argument(
+        "workbook",
+        type=Path,
+        nargs="?",
+        help="Source .xlsx with return tasks. Omit it only with --sample.",
+    )
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help=f"Run the agent against the bundled sample sheet ({SAMPLE_NAME}) "
+        f"instead of a workbook you supply. Backdates to {SAMPLE_TODAY} so the "
+        "rows are inside their windows and the flows actually run. Never live.",
+    )
     parser.add_argument(
         "--sheet", default="Sheet1", help="Sheet holding the order rows (default: Sheet1)"
     )
     parser.add_argument(
         "--working-copy",
         type=Path,
-        help="Where to write results (default: <root>/data/<name>-results.xlsx). "
-        "The source workbook is never modified.",
+        help="Where to write results (default: <name>-results.xlsx beside the "
+        "source workbook). The source workbook is never modified.",
     )
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Actually submit returns. Without this the agent walks each flow but "
-        "never clicks the final confirm.",
+        help="Actually submit returns. Without this the agent walks each flow "
+        "but never clicks the final confirm.",
+    )
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Build the work list from the account's own orders page instead of "
+        "a spreadsheet. Takes no workbook path and needs --platform. An "
+        "extension beyond the specified workflow, which is spreadsheet-driven.",
+    )
+    parser.add_argument(
+        "--discover-days",
+        type=int,
+        default=30,
+        help="How far back through the order history a discovery run looks "
+        "(default: 30)",
+    )
+    parser.add_argument(
+        "--discover-max-orders",
+        type=int,
+        default=25,
+        help="Ceiling on orders taken from each site in a discovery run "
+        "(default: 25)",
     )
     parser.add_argument(
         "--offline",
@@ -79,12 +151,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--profile-dir",
         type=Path,
-        help="Persistent Chrome profile directory (default: <root>/.profiles/default)",
+        help="Persistent Chrome profile directory (default: .profiles/default "
+        "under the checkout, or ~/.faym-returns when installed)",
     )
     parser.add_argument(
         "--artifacts-dir",
         type=Path,
-        help="Where screenshots go (default: <root>/runs/<timestamp>)",
+        help="Where screenshots go (default: runs/<timestamp> under the "
+        "checkout, or ~/.faym-returns when installed)",
     )
     parser.add_argument("--seed", type=int, help="Seed the human-timing RNG for reproducibility")
     parser.add_argument(
@@ -120,19 +194,55 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _confirm_live(count: int) -> bool:
-    print()
-    print("=" * 78)
-    print("  LIVE RUN - this will place REAL returns and move REAL money.")
-    print("=" * 78)
-    print(f"  Up to {count} line item(s) will have returns submitted.")
-    print("  Returns are hard to reverse once filed.")
+def _prompt_place_returns() -> bool:
     print()
     try:
         answer = input("  Type 'place returns' to proceed, anything else to cancel: ")
     except (EOFError, KeyboardInterrupt):
         return False
     return answer.strip().lower() == "place returns"
+
+
+def _live_banner() -> None:
+    print()
+    print("=" * 78)
+    print("  LIVE RUN - this will place REAL returns and move REAL money.")
+    print("=" * 78)
+
+
+def _confirm_live(count: int) -> bool:
+    """Confirm a live run whose work list is already fixed by the sheet."""
+    _live_banner()
+    print(f"  Up to {count} line item(s) will have returns submitted.")
+    print("  Returns are hard to reverse once filed.")
+    return _prompt_place_returns()
+
+
+def _confirm_live_discovery(options: RunOptions) -> bool:
+    """Confirm a live run that will decide for itself what to return.
+
+    Under ``--discover`` the exact count cannot be shown up front the way it can
+    when a sheet fixes the list. The bounds that *do* hold are stated instead -
+    which sites, how far back, and the ceiling on how many orders can be touched
+    - because "up to N" is the honest form of the question here.
+    """
+    sites = ", ".join(p.value for p in options.discover_platforms) or "(none)"
+    _live_banner()
+    print(f"  Sites:        {sites}")
+    print(f"  Looking back: {options.discover_within_days} day(s) of order history")
+    print(f"  Ceiling:      {options.discover_max_orders} order(s) per site", end="")
+    if options.limit is not None:
+        print(f", {options.limit} line item(s) total")
+    else:
+        print()
+    print()
+    print("  The work list comes from the account itself, not from a spreadsheet.")
+    print("  Every returnable item found inside those bounds will be submitted.")
+    print("  Returns are hard to reverse once filed.")
+    if options.limit is None:
+        print()
+        print("  Tip: --limit 1 does exactly one item, which is the right first run.")
+    return _prompt_place_returns()
 
 
 def _check_columns(book, log) -> bool:
@@ -154,6 +264,116 @@ def _check_columns(book, log) -> bool:
         "sheet - or use --sheet if the data is on another tab."
     )
     return False
+
+
+@dataclass
+class RunMode:
+    """Where this run's work list comes from.
+
+    Exactly one of two things: a spreadsheet, or the account's own orders page.
+    They are separate paths on purpose - see :func:`_resolve_mode`.
+    """
+
+    discover: bool
+    source: Path | None = None
+    """The input sheet. Always None in discovery mode: there is nothing to read."""
+
+    sample: bool = False
+
+
+def _resolve_mode(args, log) -> RunMode | None:
+    """Decide where the work list comes from, or explain why the run cannot start.
+
+    The spreadsheet is the default and the specified path: read pending tasks
+    from Excel, place those returns, write the outcome back per line item.
+    ``--discover`` opts out of it and builds the work list from the account's own
+    orders page instead - useful when a sheet has gone stale, but an extension
+    beyond the brief rather than a replacement for it, which is why it is never
+    reached by default.
+
+    Two rules regardless of path:
+
+    The sample is never live.
+        Those orders belong to somebody else.
+
+    A missing path is never guessed.
+        Omit the workbook without ``--sample`` or ``--discover`` and the run
+        stops and asks, rather than reaching for the bundled test file.
+    """
+    if args.sample and args.workbook is not None:
+        log.error(
+            "--sample runs the bundled sample sheet, so it takes no workbook "
+            "path. Drop the path to run the sample, or drop --sample to run %s.",
+            args.workbook,
+        )
+        return None
+
+    if args.discover and args.workbook is not None:
+        log.error(
+            "--discover builds its work list from the account's orders page, so "
+            "it takes no workbook path. Drop '%s' to discover, or drop "
+            "--discover to work from that sheet.",
+            args.workbook,
+        )
+        return None
+
+    if args.sample and args.discover:
+        log.error("--sample reads the bundled sheet; --discover reads no sheet at all.")
+        return None
+
+    if args.sample:
+        if args.live:
+            log.error(
+                "--sample and --live cannot be combined. The sample sheet holds "
+                "someone else's orders; filing real returns against them is not "
+                "something this agent will do."
+            )
+            return None
+        source = find_sample_workbook()
+        if source is None:
+            log.error(
+                "Sample workbook not found. Expected '%s' in the checkout's "
+                "data/ directory or in ~/Downloads. Pass a workbook path instead.",
+                SAMPLE_NAME,
+            )
+            return None
+        log.info("Sample run against the bundled sheet: %s", source)
+        return RunMode(discover=False, source=source, sample=True)
+
+    if args.discover:
+        if args.offline:
+            log.error(
+                "--offline has nothing to plan under --discover. The work list "
+                "comes from the live orders page, which needs a browser."
+            )
+            return None
+        if args.inspect:
+            log.error(
+                "--inspect prints what was parsed out of a sheet, and --discover "
+                "has no sheet to parse."
+            )
+            return None
+        if not args.platform:
+            log.error(
+                "--discover needs to know which site to sign into: pass "
+                "--platform Flipkart and/or --platform Amazon. With no sheet "
+                "there is nothing else to say where the orders live."
+            )
+            return None
+        return RunMode(discover=True)
+
+    if args.workbook is None:
+        log.error(
+            "No workbook given. Pass the path to your .xlsx, or use --sample to "
+            "run the bundled sample sheet, or --discover to build the work list "
+            "from the account's own orders page."
+        )
+        return None
+    source = args.workbook.expanduser().resolve()
+    if not source.exists():
+        log.error("Workbook not found: %s", source)
+        return None
+    return RunMode(discover=False, source=source)
 
 
 def _install_interrupt_handler() -> None:
@@ -193,10 +413,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     log = logging.getLogger("faym_returns")
 
-    source = args.workbook.expanduser().resolve()
-    if not source.exists():
-        log.error("Workbook not found: %s", source)
+    mode = _resolve_mode(args, log)
+    if mode is None:
         return 2
+    source = mode.source
 
     # --inspect reads the source directly; nothing is copied or written.
     if args.inspect:
@@ -211,10 +431,61 @@ def main(argv: list[str] | None = None) -> int:
         _print_inspection(items)
         return 0
 
-    root = DEFAULT_ROOT
-    working = args.working_copy or (root / "data" / f"{source.stem}-results.xlsx")
+    today = args.today
+    if mode.sample and today is None:
+        today = SAMPLE_TODAY
+        log.info(
+            "Backdating the window check to %s. Every row in the sample sheet "
+            "is long past its return window at today's real date, so without "
+            "this the agent would refuse all 14 items and drive nothing. Pass "
+            "--today to override.",
+            today,
+        )
+
+    options = RunOptions(
+        dry_run=not args.live,
+        offline=args.offline,
+        limit=args.limit,
+        only_orders=tuple(args.orders),
+        only_platforms=tuple(Platform(p) for p in args.platform),
+        resume=not args.no_resume,
+        grace_days=args.grace_days,
+        today=today,
+        discover=mode.discover,
+        discover_platforms=tuple(Platform(p) for p in args.platform),
+        discover_within_days=args.discover_days,
+        discover_max_orders=args.discover_max_orders,
+    )
+
+    # Under --discover the count is not known until the browser has walked the
+    # orders page, so the bounds are confirmed here instead - before anything is
+    # created, so cancelling leaves no stray output file behind. A sheet-driven
+    # live run knows its exact count and is confirmed further down.
+    if args.live and mode.discover and not _confirm_live_discovery(options):
+        log.info("Cancelled. Nothing was submitted.")
+        return 1
+
+    root = _state_root()
+    # Results land beside the workbook they came from. A run against your own
+    # spreadsheet has no reason to write into this repo's data/ directory, and
+    # the sample run keeps its own file so it never clobbers the committed
+    # outputs that the README quotes. A discovery run has no input file at all,
+    # so it names a fresh timestamped one in the current directory.
+    if args.working_copy is not None:
+        working = args.working_copy
+    elif mode.discover:
+        working = Path.cwd() / f"returns-{dt.datetime.now():%Y%m%d-%H%M%S}.xlsx"
+    elif mode.sample:
+        working = source.parent / "sample-run-results.xlsx"
+    else:
+        working = source.parent / f"{source.stem}-results.xlsx"
     working = working.expanduser().resolve()
-    if not working.exists() or args.no_resume:
+
+    if mode.discover:
+        if not working.exists() or args.no_resume:
+            create_results_workbook(working, args.sheet)
+        log.info("Results workbook: %s (created for this run; no input sheet)", working)
+    elif not working.exists() or args.no_resume:
         prepare_working_copy(source, working)
         log.info("Working copy: %s (source left untouched)", working)
     else:
@@ -227,17 +498,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if not _check_columns(book, log):
         return 2
-
-    options = RunOptions(
-        dry_run=not args.live,
-        offline=args.offline,
-        limit=args.limit,
-        only_orders=tuple(args.orders),
-        only_platforms=tuple(Platform(p) for p in args.platform),
-        resume=not args.no_resume,
-        grace_days=args.grace_days,
-        today=args.today,
-    )
 
     pacing = Pacing()
     if args.fast:
@@ -271,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     orchestrator = Orchestrator(book, session_config, options, platform_config)
 
-    if args.live and not args.offline:
+    if args.live and not mode.discover and not args.offline:
         to_attempt, _ = orchestrator.plan()
         if not to_attempt:
             log.info("No eligible line items to submit. Nothing to do.")
@@ -295,6 +555,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {item.label}: {outcome.status.value} - {outcome.log[:110]}")
     if options.dry_run and not options.offline:
         print("\nThis was a DRY RUN. No returns were submitted. Re-run with --live.")
+    if args.sample:
+        print(
+            "This was a SAMPLE run against the bundled sheet, backdated to "
+            f"{today}. Point the agent at your own workbook for a real run."
+        )
     print()
     return 0
 
