@@ -41,6 +41,28 @@ from .models import AgentAbort
 
 log = logging.getLogger(__name__)
 
+#: Wording Chromium uses when a profile directory is already open elsewhere.
+#: Matched loosely because it differs across platforms and versions.
+_PROFILE_LOCK_HINTS = (
+    "profile appears to be in use",
+    "already in use",
+    "singletonlock",
+    "cannot create a file when that file already exists",
+    "profilelock",
+    "profile lock",
+)
+
+
+def _is_profile_locked(exc: BaseException) -> bool:
+    """Whether a launch failure was a locked profile rather than a missing Chrome.
+
+    The distinction matters: a missing Chrome is worth falling back for, and a
+    locked profile is not - the fallback would open a *different*, signed-out
+    profile and demand a fresh login for no reason.
+    """
+    message = str(exc).lower()
+    return any(hint in message for hint in _PROFILE_LOCK_HINTS)
+
 #: Injected before any page script runs.
 #:
 #: Deliberately minimal. Running against real Chrome with --enable-automation
@@ -161,11 +183,34 @@ class Session:
             )
             log.info("Launched installed Google Chrome with persistent profile.")
         except Exception as exc:  # noqa: BLE001 - fall back to bundled Chromium
+            if _is_profile_locked(exc):
+                # Falling back here would be actively harmful: the fallback uses
+                # a different profile directory, so the run would come up in a
+                # signed-out browser and ask for an OTP the operator has already
+                # given. Naming the real cause is the only useful thing to do.
+                raise AgentAbort(
+                    f"The browser profile at {self.config.profile_dir} is already "
+                    "in use. Close any Chrome window running this profile (or any "
+                    "other faym-returns run) and try again. Continuing would "
+                    "start a second, signed-out browser and ask you to log in "
+                    "again for no reason."
+                ) from exc
+            # A genuinely missing Chrome is worth falling back for - but never
+            # onto the Chrome profile directory. Chromium and Chrome are
+            # different builds, and pointing both at one user_data_dir is a good
+            # way to corrupt it and lose the saved session.
+            fallback_dir = self.config.profile_dir.with_name(
+                self.config.profile_dir.name + "-chromium"
+            )
+            fallback_dir.mkdir(parents=True, exist_ok=True)
             log.warning(
                 "Could not launch installed Chrome (%s); falling back to bundled "
-                "Chromium. Detection risk is higher - install Chrome if possible.",
+                "Chromium with its own profile at %s. Detection risk is higher, "
+                "and this profile signs in separately - install Chrome if you can.",
                 exc,
+                fallback_dir,
             )
+            launch_kwargs["user_data_dir"] = str(fallback_dir)
             self.context = self._playwright.chromium.launch_persistent_context(**launch_kwargs)
 
         self.context.add_init_script(STEALTH_SCRIPT)

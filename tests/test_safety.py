@@ -10,7 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from faym_returns.browser import CHALLENGE_MARKERS, Session, SessionConfig
+from faym_returns.browser import (
+    CHALLENGE_MARKERS,
+    Session,
+    SessionConfig,
+    _is_profile_locked,
+)
 from faym_returns.models import AgentAbort, Outcome, ReturnStatus, TaskStatus
 from faym_returns.orchestrator import _is_settled
 from faym_returns.platforms.amazon import AmazonAdapter
@@ -227,3 +232,47 @@ def test_no_intermediate_selector_can_match_the_submit_button():
             for candidate in actions.get(key, []):
                 assert "has-text('Confirm')" not in candidate, f"{adapter_cls.__name__}.{key}"
                 assert 'has-text("Confirm")' not in candidate, f"{adapter_cls.__name__}.{key}"
+
+
+# ------------------------------------------------- keeping one login, not many
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ProcessSingleton: profile appears to be in use by another Chrome process",
+        "Failed to create a ProfileLock",
+        "The profile is already in use",
+        "SingletonLock: File exists",
+    ],
+)
+def test_a_locked_profile_is_not_mistaken_for_a_missing_chrome(message):
+    """These two failures need opposite responses.
+
+    A missing Chrome is worth falling back to Chromium for. A locked profile is
+    not: the fallback uses a different profile directory, so the run would come
+    up signed out and ask for an OTP the operator has already given.
+    """
+    assert _is_profile_locked(RuntimeError(message)) is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Chromium distribution 'chrome' is not found at /Applications/...",
+        "Executable doesn't exist at /path/to/chrome",
+        "Timeout 30000ms exceeded",
+    ],
+)
+def test_a_genuinely_missing_chrome_still_falls_back(message):
+    assert _is_profile_locked(RuntimeError(message)) is False
+
+
+def test_the_chromium_fallback_never_shares_the_chrome_profile(tmp_path):
+    """Two different browser builds on one user_data_dir corrupts it, and the
+    thing lost is the saved session."""
+    profile = tmp_path / "default"
+    fallback = profile.with_name(profile.name + "-chromium")
+
+    assert fallback != profile
+    assert fallback.name == "default-chromium"

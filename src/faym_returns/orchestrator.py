@@ -424,6 +424,40 @@ class Orchestrator:
         )
 
 
+def sign_in(
+    session_config: SessionConfig,
+    platforms: Sequence[Platform],
+    platform_config: Optional[dict] = None,
+    otp_provider: Optional[OtpProvider] = None,
+) -> dict[Platform, bool]:
+    """Sign in to each platform and stop. Attempts no returns, writes no file.
+
+    Sign-in is once-per-profile rather than once-per-run - the profile holds the
+    cookies - but until now the only way to establish it was to start a real
+    pass, which then went on to walk orders. This exists so the OTP can be done
+    once, deliberately, ahead of whatever the session is actually for.
+
+    Returns ``{platform: was_already_signed_in}`` so the caller can tell a
+    restored session from a fresh login.
+    """
+    platform_config = platform_config or {}
+    results: dict[Platform, bool] = {}
+    with Session(session_config) as session:
+        for platform in platforms:
+            adapter = adapter_for(platform)(
+                session,
+                platform_config.get(platform.value.lower(), {}),
+                otp_provider=otp_provider or console_otp,
+            )
+            session.new_page(close_previous=True)
+            session.goto(adapter.sel["urls"]["orders"])
+            already = adapter.is_logged_in()
+            if not already:
+                adapter.ensure_logged_in()
+            results[platform] = already
+    return results
+
+
 def _group_by_platform(items: Sequence[LineItem]) -> dict[Platform, dict[str, list[LineItem]]]:
     """Platform -> order id -> its line items, preserving encounter order."""
     grouped: dict[Platform, dict[str, list[LineItem]]] = {}

@@ -271,8 +271,27 @@ types and submits it.
 
 Omit the number and it falls back to letting you sign in entirely by hand; it also
 falls back automatically if the login form can't be located, so a changed login
-page never blocks a run. Because the browser profile persists, sign-in is
-once-per-profile rather than once-per-run.
+page never blocks a run.
+
+**Sign in once, ahead of everything else:**
+
+```bash
+PYTHONPATH=src python3 -m faym_returns.cli --login --platform Flipkart --phone 9205359199
+```
+
+That signs in, confirms it worked, and exits — no returns attempted, no file
+written. The profile persists, so every later run reuses the session and you are
+not asked for another code. Re-run it any time to check the session is still
+alive; it will say *"already signed in (restored from the profile)"* and cost
+nothing.
+
+Two things end a session early, and both are now handled loudly rather than
+quietly: **the profile can only be open once**, so a run refuses to start if a
+Chrome window is already using it rather than silently opening a second,
+signed-out browser; and if installed Chrome can't be launched at all, the
+bundled-Chromium fallback gets its **own** profile directory, because pointing
+two different browser builds at one `user_data_dir` corrupts it and the thing
+you lose is the saved login.
 
 Codes are held in memory only for the moment between entry and submission. They
 are never logged, written to the workbook, or persisted.
@@ -513,6 +532,7 @@ the delays for debugging and should never point at a live site.
 | Flag | Effect |
 |---|---|
 | `--live` | Actually submit. Off by default; also needs a typed confirmation. |
+| `--login` | Sign in to `--platform`(s) and exit. Do this once before a session; later runs reuse it. |
 | `--discover` | Build the work list from the account's orders page instead of a sheet. Takes no workbook; needs `--platform`. |
 | `--sample` | Run against the bundled sample sheet, no path needed. Backdates to 2026-07-06; cannot be combined with `--live`. |
 | `--offline` | Plan only; no browser. Needs a sheet — there is nothing to plan offline without one. |
@@ -549,7 +569,7 @@ src/faym_returns/
     flipkart.py     sequential per-item flow
     amazon.py       batch detection + sequential fallback
   selectors/*.yaml  all selectors, as ordered candidate lists
-tests/              171 tests; the browser is stubbed, the data is real
+tests/              179 tests; the browser is stubbed, the data is real
 ```
 
 ## What's in `data/`

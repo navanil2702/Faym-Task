@@ -18,9 +18,9 @@ from pathlib import Path
 from . import progress
 from .browser import SessionConfig
 from .humanize import Pacing
-from .models import Platform
+from .models import AgentAbort, Platform
 from .normalize import explode_rows
-from .orchestrator import Orchestrator, RunOptions
+from .orchestrator import Orchestrator, RunOptions, sign_in
 from .workbook import (
     ReturnsWorkbook,
     WorkbookError,
@@ -96,6 +96,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Actually submit returns. Without this the agent walks each flow "
         "but never clicks the final confirm.",
+    )
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        help="Sign in to the given --platform(s) and exit. Attempts no returns "
+        "and writes no file. The profile persists, so later runs reuse the "
+        "session instead of asking for another OTP.",
     )
     parser.add_argument(
         "--discover",
@@ -266,6 +273,72 @@ def _check_columns(book, log) -> bool:
     return False
 
 
+def _build_session_config(args, root: Path) -> SessionConfig:
+    """Browser session settings. Shared by a run and by --login, so that a
+    sign-in lands in exactly the profile a later run will reuse."""
+    pacing = Pacing()
+    if args.fast:
+        pacing = Pacing(
+            think_min=0.15,
+            think_max=0.5,
+            key_min=0.01,
+            key_max=0.04,
+            between_items_min=1.0,
+            between_items_max=3.0,
+            between_orders_min=1.5,
+            between_orders_max=4.0,
+            long_break_every=0,
+            long_break_min=0.0,
+            long_break_max=0.0,
+        )
+
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return SessionConfig(
+        profile_dir=(args.profile_dir or root / ".profiles" / "default").expanduser().resolve(),
+        artifacts_dir=(args.artifacts_dir or root / "runs" / stamp).expanduser().resolve(),
+        quiet_hours=(0, 0) if args.allow_quiet_hours else (1, 7),
+        seed=args.seed,
+        pacing=pacing,
+    )
+
+
+def _do_login(args, log) -> int:
+    """Sign in once, report what happened, and exit."""
+    if not args.platform:
+        log.error(
+            "--login needs to know which site to sign into: pass --platform "
+            "Flipkart and/or --platform Amazon."
+        )
+        return 2
+
+    session_config = _build_session_config(args, _state_root())
+    platform_config = (
+        {p.value.lower(): {"phone": args.phone} for p in Platform} if args.phone else {}
+    )
+    log.info("Profile: %s", session_config.profile_dir)
+
+    try:
+        results = sign_in(
+            session_config,
+            [Platform(p) for p in args.platform],
+            platform_config,
+        )
+    except AgentAbort as exc:
+        log.error("%s", exc)
+        return 2
+
+    print()
+    for platform, already in results.items():
+        state = "already signed in (restored from the profile)" if already else "signed in now"
+        print(f"  {platform.value}: {state}")
+    print()
+    print(f"  Session saved to {session_config.profile_dir}")
+    print("  Later runs reuse it - you should not be asked for another code")
+    print("  unless the platform expires the session or the profile is deleted.")
+    print()
+    return 0
+
+
 @dataclass
 class RunMode:
     """Where this run's work list comes from.
@@ -413,6 +486,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     log = logging.getLogger("faym_returns")
 
+    # --login does not read or write a workbook, so it short-circuits before any
+    # of the input-path resolution below.
+    if args.login:
+        return _do_login(args, log)
+
     mode = _resolve_mode(args, log)
     if mode is None:
         return 2
@@ -499,30 +577,7 @@ def main(argv: list[str] | None = None) -> int:
     if not _check_columns(book, log):
         return 2
 
-    pacing = Pacing()
-    if args.fast:
-        pacing = Pacing(
-            think_min=0.15,
-            think_max=0.5,
-            key_min=0.01,
-            key_max=0.04,
-            between_items_min=1.0,
-            between_items_max=3.0,
-            between_orders_min=1.5,
-            between_orders_max=4.0,
-            long_break_every=0,
-            long_break_min=0.0,
-            long_break_max=0.0,
-        )
-
-    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    session_config = SessionConfig(
-        profile_dir=(args.profile_dir or root / ".profiles" / "default").expanduser().resolve(),
-        artifacts_dir=(args.artifacts_dir or root / "runs" / stamp).expanduser().resolve(),
-        quiet_hours=(0, 0) if args.allow_quiet_hours else (1, 7),
-        seed=args.seed,
-        pacing=pacing,
-    )
+    session_config = _build_session_config(args, root)
 
     # The same number is offered to whichever platform needs a sign-in; only the
     # platforms present in the sheet will ever use it.
