@@ -33,6 +33,35 @@ orders_page:
     - "css:#searchOrdersInput"
     - "placeholder:/search all orders/i"
 
+# Used only by a run with no spreadsheet, which builds its work list by walking
+# Your Orders. See the equivalent block in flipkart.yaml.
+discovery:
+  order_id_patterns:
+    - "\\b(\\d{3}-\\d{7}-\\d{7})\\b"
+  returnable_markers:
+    - "delivered"
+    - "return or replace"
+    - "return items"
+  skip_markers:
+    - "refunded"
+    - "refund issued"
+    - "cancelled"
+    - "return complete"
+    - "return started"
+    - "returned"
+    - "not returnable"
+    - "return window closed"
+  return_window_patterns:
+    - "return\\s*(?:window|policy)[^0-9]{0,12}([0-9]{1,2})\\s*days?"
+    - "returnable\\s*(?:with)?in\\s*([0-9]{1,2})\\s*days?"
+    - "eligible for return (?:with)?in ([0-9]{1,2}) days?"
+  delivered_on_patterns:
+    - "delivered ([A-Za-z]{3,9}\\s+[0-9]{1,2}(?:,?\\s+[0-9]{4})?)"
+    - "delivered on ([0-9]{1,2}\\s+[A-Za-z]{3,9}(?:,?\\s+[0-9]{4})?)"
+  next_page:
+    - "role:link[name=/^next/i]"
+    - "css:.a-pagination .a-last a"
+
 order_detail:
   item_block:
     - "css:.a-fixed-left-grid.a-spacing-base"

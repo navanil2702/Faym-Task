@@ -128,12 +128,53 @@ _DONE_FILL = PatternFill("solid", fgColor="E2EFDA")
 _SKIP_FILL = PatternFill("solid", fgColor="EDEDED")
 
 
+#: Order-sheet columns written for a run that discovered its own work. They are
+#: the input format's own columns, so a discovered result workbook can be read
+#: straight back in as the input to a later run.
+DISCOVERED_ORDER_COLUMNS = [
+    "Order Id",
+    "Platform",
+    "Product Link",
+    "No of Product",
+    "Delivery date",
+    "Return Window",
+    "Status",
+    "Refund ID",
+    "Return Status",
+    "Refund Amount",
+    "Timestamp",
+    "Log",
+]
+
+
 def prepare_working_copy(source: Path, dest: Path) -> Path:
     """Copy the source workbook to ``dest`` so the original is never modified."""
+    source, dest = Path(source), Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if source.resolve() == dest.resolve():
         raise ValueError("Working copy must differ from the source workbook.")
     shutil.copy2(source, dest)
+    return dest
+
+
+def create_results_workbook(dest: Path, orders_sheet: str = ORDERS_SHEET_DEFAULT) -> Path:
+    """Create an empty results workbook for a run that has no input sheet.
+
+    A discovery run has nothing to copy, so the output file is built here
+    instead - with the *input* format's own columns, so the file it produces can
+    be fed straight back in as the input to a later run.
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = orders_sheet
+    for col, name in enumerate(DISCOVERED_ORDER_COLUMNS, start=1):
+        cell = sheet.cell(row=1, column=col, value=name)
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+    sheet.freeze_panes = "A2"
+    book.save(dest)
     return dest
 
 
@@ -213,6 +254,76 @@ class ReturnsWorkbook:
                 pending.append((row, record))
         return pending
 
+    # -------------------------------------------------------------- discovery
+
+    def record_discovered_orders(self, items: Iterable[LineItem]) -> int:
+        """Give discovered line items a home row, and stamp it onto each one.
+
+        A discovery run has no source sheet, so nothing downstream has a row to
+        point at - and the roll-up, the ``Source Row`` back-pointer and resuming
+        all key on one. Writing the orders into the sheet first, then stamping
+        ``source_row``, means every path after this is the same code the
+        spreadsheet run uses. Re-running against the same file updates the
+        existing row for an order rather than appending a second one.
+        """
+        items = list(items)
+        if not items:
+            return 0
+
+        book = openpyxl.load_workbook(self.path)
+        sheet = book[self.orders_sheet_name]
+
+        existing: dict[str, int] = {}
+        order_col = self.headers.get("Order Id")
+        if order_col:
+            for row in range(2, sheet.max_row + 1):
+                value = sheet.cell(row=row, column=order_col).value
+                if value:
+                    existing[str(value).strip()] = row
+
+        groups: dict[str, list[LineItem]] = {}
+        for item in items:
+            groups.setdefault(item.order_id, []).append(item)
+
+        added = 0
+        for order_id, group in groups.items():
+            row = existing.get(order_id)
+            if row is None:
+                row = max(sheet.max_row + 1, 2)
+                existing[order_id] = row
+                added += 1
+            head = group[0]
+            payload = {
+                "Order Id": order_id,
+                "Platform": head.platform.value if head.platform else "Unknown",
+                "Product Link": "\n".join(i.product_url for i in group),
+                "No of Product": len(group),
+                "Delivery date": head.delivery_date.isoformat() if head.delivery_date else "",
+                "Return Window": (
+                    f"{head.return_window_days} Days" if head.return_window_days else ""
+                ),
+                "Status": "To Do",
+            }
+            for header, value in payload.items():
+                col = self.headers.get(header)
+                if col is None:
+                    continue
+                cell = sheet.cell(row=row, column=col, value=value)
+                cell.alignment = Alignment(vertical="top", wrap_text=(header == "Product Link"))
+            for item in group:
+                item.source_row = row
+
+        self._autosize(sheet)
+        book.save(self.path)
+        self._reload()
+        return added
+
+    def _reload(self) -> None:
+        """Re-read the on-disk state after this object wrote to it."""
+        self._values = openpyxl.load_workbook(self.path, data_only=True)
+        self._sheet = self._values[self.orders_sheet_name]
+        self.headers = self._read_headers(self._sheet)
+
     # ---------------------------------------------------------------- writing
 
     def write_results(
@@ -238,6 +349,11 @@ class ReturnsWorkbook:
             by_row.setdefault(item.source_row, []).append((item, outcome))
 
         for source_row, group in by_row.items():
+            if source_row < 2:
+                # A discovered item that never got recorded into the order sheet
+                # - there is no row to roll up onto. The line-item sheet above
+                # still holds it, so nothing is lost.
+                continue
             self._roll_up_order_row(orders, source_row, group, dry_run_marker)
 
         self._autosize(line_sheet)
