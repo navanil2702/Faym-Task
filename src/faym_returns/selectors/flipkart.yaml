@@ -163,11 +163,16 @@ actions:
     - "text:/schedule (a )?pickup/i"
     - "text:/pickup/i"
     - "role:radio[name=/pickup/i]"
+  # Deliberately no loose `button:has-text('Confirm')` fallback here. has-text
+  # is a substring match, so it also matches "Confirm Return" - the final,
+  # irreversible submit, which `confirm_button` below matches by design. An
+  # intermediate step reaching for that button would file the return during a
+  # dry run. Every candidate here names the address explicitly, and
+  # `click_intermediate` refuses submit-looking controls as a second line.
   pickup_address_confirm:
     - "role:button[name=/(confirm|use this|deliver to this) address/i]"
     - "text:/confirm address/i"
     - "text:/use this address/i"
-    - "css:button:has-text('Confirm')"
   pickup_slot:
     - "css:li[role='option']"
     - "css:div[role='option']"
